@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-service-pdb
+  namespace: notification
+spec:
+  # maxUnavailable, not minAvailable: 1 -- see catalog-service/base/pdb.yaml's
+  # comment (same replicas:1 + PDB-blocks-drain issue). OBS-049.
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: notification-service

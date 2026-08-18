@@ -1,0 +1,592 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main, improvements, observability]
+  pull_request:
+    branches: [main, improvements, observability]
+
+# One run per branch at a time -- without this, rapid pushes to the same
+# branch can run overlapping `deploy` jobs that race on the same `git push`
+# to k8s/overlays/*/kustomization.yaml. cancel-in-progress is deliberately
+# false: cancelling a deploy mid-image-tag-update is worse than queueing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# All secrets are stored in GitHub Secrets — never hardcoded here.
+# Required secrets:
+#   AWS_ACCOUNT_ID  — used only to construct the ECR registry URL
+#   AWS_ROLE_ARN    — OIDC role; no static AWS keys anywhere
+#   API_URL         — api-gateway URL injected at frontend build time
+#   SEMGREP_APP_TOKEN (optional) — needed only if Semgrep Cloud is used
+
+env:
+  AWS_REGION:    us-west-1
+  FRONTEND_REPO: bookstore-frontend
+  CATALOG_REPO:  bookstore-catalog-service
+  USER_REPO:     bookstore-user-service
+  ORDER_REPO:    bookstore-order-service
+  NOTIFICATION_REPO: bookstore-notification-service
+  API_GATEWAY_REPO: bookstore-api-gateway
+  EKS_CLUSTER:   bookstore-eks
+  K8S_NAMESPACE: bookstore
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # STAGE 0 · Secret Detection
+  # Fail immediately if any secret, key, or token is found in the commit.
+  # Runs on every push and PR before any other job.
+  # ─────────────────────────────────────────────────────────────────────────
+  secret-scan:
+    name: "🔐 Secret Scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (full history for Gitleaks)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks — detect secrets across git history
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # STAGE 1 · SAST + Dependency Audit
+  # Static analysis and known-vulnerability checks on source code.
+  # ─────────────────────────────────────────────────────────────────────────
+  sast:
+    name: "🛡️ SAST & Dependency Audit"
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            client/package-lock.json
+            services/catalog-service/package-lock.json
+            services/user-service/package-lock.json
+            services/notification-service/package-lock.json
+            services/order-service/package-lock.json
+            services/api-gateway/package-lock.json
+
+      - name: Install catalog-service dependencies
+        run: cd services/catalog-service && npm ci
+
+      - name: Run catalog-service tests
+        run: cd services/catalog-service && npm test
+
+      - name: npm audit — catalog-service production deps (fail on high/critical CVEs)
+        run: cd services/catalog-service && npm audit --audit-level=high --omit=dev
+
+      - name: Install user-service dependencies
+        run: cd services/user-service && npm ci
+
+      - name: Run user-service tests
+        run: cd services/user-service && npm test
+
+      - name: npm audit — user-service production deps (fail on high/critical CVEs)
+        run: cd services/user-service && npm audit --audit-level=high --omit=dev
+
+      - name: Install notification-service dependencies
+        run: cd services/notification-service && npm ci
+
+      - name: Run notification-service tests
+        run: cd services/notification-service && npm test
+
+      - name: npm audit — notification-service production deps (fail on high/critical CVEs)
+        run: cd services/notification-service && npm audit --audit-level=high --omit=dev
+
+      - name: Install order-service dependencies
+        run: cd services/order-service && npm ci
+
+      - name: Run order-service tests
+        run: cd services/order-service && npm test
+
+      - name: npm audit — order-service production deps (fail on high/critical CVEs)
+        run: cd services/order-service && npm audit --audit-level=high --omit=dev
+
+      - name: Install api-gateway dependencies
+        run: cd services/api-gateway && npm ci
+
+      - name: Run api-gateway tests
+        run: cd services/api-gateway && npm test
+
+      - name: npm audit — api-gateway production deps (fail on high/critical CVEs)
+        run: cd services/api-gateway && npm audit --audit-level=high --omit=dev
+
+      - name: Install frontend dependencies
+        run: cd client && npm ci
+
+      - name: Run frontend tests
+        run: cd client && npm test
+        env:
+          CI: true
+
+      - name: npm audit — frontend (fail on critical CVEs; react-scripts build tooling has unfixable highs)
+        run: cd client && npm audit --audit-level=critical
+
+      - name: Semgrep SAST (Node.js + OWASP Top-10 rules)
+        run: |
+          python -m pip install semgrep --quiet
+          semgrep scan \
+            --config p/nodejs \
+            --config p/owasp-top-ten \
+            --config p/secrets \
+            --exclude '**/__tests__/**' \
+            --error \
+            .
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # STAGE 2 · Lint & Manifest Validation
+  # Linting must pass; k8s manifests must be structurally valid.
+  # ─────────────────────────────────────────────────────────────────────────
+  validate:
+    name: "✅ Lint & Validate"
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install frontend dependencies
+        run: cd client && npm ci
+
+      - name: ESLint — frontend (zero warnings allowed)
+        run: cd client && npx eslint src --max-warnings=0
+
+      - name: Validate Kubernetes manifests (kubeconform)
+        run: |
+          curl -sLo kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/v0.6.4/kubeconform-linux-amd64.tar.gz"
+          tar -xzf kubeconform.tar.gz
+          sudo mv kubeconform /usr/local/bin/
+          find k8s -name "*.yaml" ! -name "kustomization.yaml" | \
+            xargs kubeconform \
+              -ignore-missing-schemas \
+              -kubernetes-version 1.31.0 \
+              -summary
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # STAGE 3 · Build → Container Scan → Push
+  # Images are built, scanned by Trivy, then pushed to ECR.
+  # A CRITICAL or HIGH CVE fails the build — images are never pushed dirty.
+  # Authentication uses OIDC; no AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY.
+  # ─────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: "🐳 Build → Trivy Scan → Push"
+    runs-on: ubuntu-latest
+    needs: [sast, validate]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/improvements' || github.ref == 'refs/heads/observability'
+    permissions:
+      id-token: write        # required for OIDC token exchange
+      contents: read
+      security-events: write # required for SARIF upload to Security tab
+    outputs:
+      image-tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # The `env` context isn't available inside an `env:` block's own value
+      # expressions at any level (workflow or job) -- GitHub Actions rejects
+      # the whole workflow file at parse time if you try, which silently
+      # broke every run on this branch until caught (0s "workflow file
+      # issue" failures, no job ever queued). Computing it in a step instead
+      # keeps AWS_REGION as the single source of truth (workflow-level env,
+      # set from config.env by scripts/configure.py) without that
+      # restriction -- env vars ARE exposed as real shell variables inside
+      # `run:` steps.
+      - name: Compute ECR registry URL
+        run: echo "ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_ENV"
+
+      - name: Derive image tag (first 8 chars of git SHA)
+        id: tag
+        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials via OIDC (no static keys)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a  # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64  # v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      # ── Catalog service image ────────────────────────────────────────────
+      - name: Build catalog-service image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./services/catalog-service
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.CATALOG_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan catalog-service (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.CATALOG_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-catalog-service.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show catalog-service CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-catalog-service.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-catalog-service.sarif \
+          || echo "trivy-catalog-service.sarif not found"
+
+      - name: Upload catalog-service Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always()
+        with:
+          sarif_file: trivy-catalog-service.sarif
+          category:   trivy-catalog-service
+
+      - name: Push catalog-service image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.CATALOG_REPO }}:${{ steps.tag.outputs.tag }}
+
+      # ── User service image ───────────────────────────────────────────────
+      - name: Build user-service image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./services/user-service
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.USER_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan user-service (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.USER_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-user-service.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show user-service CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-user-service.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-user-service.sarif \
+          || echo "trivy-user-service.sarif not found"
+
+      - name: Upload user-service Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always()
+        with:
+          sarif_file: trivy-user-service.sarif
+          category:   trivy-user-service
+
+      - name: Push user-service image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.USER_REPO }}:${{ steps.tag.outputs.tag }}
+
+      # ── Notification service image ───────────────────────────────────────
+      - name: Build notification-service image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./services/notification-service
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.NOTIFICATION_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan notification-service (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.NOTIFICATION_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-notification-service.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show notification-service CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-notification-service.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-notification-service.sarif \
+          || echo "trivy-notification-service.sarif not found"
+
+      - name: Upload notification-service Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always()
+        with:
+          sarif_file: trivy-notification-service.sarif
+          category:   trivy-notification-service
+
+      - name: Push notification-service image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.NOTIFICATION_REPO }}:${{ steps.tag.outputs.tag }}
+
+      # ── Order service image ──────────────────────────────────────────────
+      - name: Build order-service image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./services/order-service
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.ORDER_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan order-service (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.ORDER_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-order-service.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show order-service CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-order-service.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-order-service.sarif \
+          || echo "trivy-order-service.sarif not found"
+
+      - name: Upload order-service Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always()
+        with:
+          sarif_file: trivy-order-service.sarif
+          category:   trivy-order-service
+
+      - name: Push order-service image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.ORDER_REPO }}:${{ steps.tag.outputs.tag }}
+
+      # ── API gateway image ────────────────────────────────────────────────
+      - name: Build api-gateway image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./services/api-gateway
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.API_GATEWAY_REPO }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan api-gateway (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.API_GATEWAY_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-api-gateway.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show api-gateway CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-api-gateway.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-api-gateway.sarif \
+          || echo "trivy-api-gateway.sarif not found"
+
+      - name: Upload api-gateway Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always()
+        with:
+          sarif_file: trivy-api-gateway.sarif
+          category:   trivy-api-gateway
+
+      - name: Push api-gateway image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.API_GATEWAY_REPO }}:${{ steps.tag.outputs.tag }}
+
+      # ── Frontend image ───────────────────────────────────────────────────
+      - name: Build frontend image (no push yet)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context:   ./client
+          push:      false
+          load:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_REPO }}:${{ steps.tag.outputs.tag }}
+          build-args: REACT_APP_API_URL=${{ secrets.API_URL }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Trivy — scan frontend (CRITICAL + HIGH = hard fail)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref:      ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_REPO }}:${{ steps.tag.outputs.tag }}
+          format:         sarif
+          output:         trivy-frontend.sarif
+          severity:       CRITICAL,HIGH
+          exit-code:      "1"
+          ignore-unfixed: true
+
+      - name: Show frontend CVEs in CI log (diagnostic on failure)
+        if: failure()
+        run: |
+          [ -f trivy-frontend.sarif ] && \
+            jq -r '.runs[].results[] |
+              "[" + (.level | ascii_upcase) + "] " + .ruleId +
+              ": " + (.message.text | split("\n")[0])' \
+            trivy-frontend.sarif \
+          || echo "trivy-frontend.sarif not found"
+
+      - name: Upload frontend Trivy SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4
+        if: always() && hashFiles('trivy-frontend.sarif') != ''
+        with:
+          sarif_file: trivy-frontend.sarif
+          category:   trivy-frontend
+
+      - name: Push frontend image
+        run: |
+          docker push ${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_REPO }}:${{ steps.tag.outputs.tag }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # STAGE 4 · GitOps image-tag update
+  #
+  # Requires manual approval via the "production" environment gate.
+  # Instead of running kubectl directly, this stage commits the new image tags
+  # into k8s/kustomization.yaml. ArgoCD watches the repo and reconciles the
+  # cluster automatically (poll interval: 3 min).
+  #
+  # The push uses GITHUB_TOKEN which never re-triggers a new pipeline run,
+  # so there is no loop risk.
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: "🚀 Update image tags (GitOps → ArgoCD)"
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/observability'
+    timeout-minutes: 30
+    environment: production     # ← requires a reviewer to approve in GitHub
+    permissions:
+      id-token: write
+      contents: write           # needed to push the kustomization.yaml commit
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Use the default GITHUB_TOKEN — pushes made with this token do NOT
+          # trigger another workflow run, preventing an infinite loop.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # Same "env context isn't available inside env:" restriction as the
+      # build-and-push job above -- see that job's comment for the full
+      # explanation.
+      - name: Compute ECR registry URL
+        run: echo "ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_ENV"
+
+      - name: Install kustomize
+        run: |
+          curl -sLo kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.3.0/kustomize_v5.3.0_linux_amd64.tar.gz"
+          tar -xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/kustomize
+
+      - name: Update image tags in kustomization.yaml
+        env:
+          TAG: ${{ needs.build-and-push.outputs.image-tag }}
+        run: |
+          (cd k8s/overlays/prod && \
+            kustomize edit set image bookstore-frontend=${{ env.ECR_REGISTRY }}/${{ env.FRONTEND_REPO }}:${TAG})
+          (cd k8s/services/catalog-service/overlays/prod && \
+            kustomize edit set image bookstore-catalog-service=${{ env.ECR_REGISTRY }}/${{ env.CATALOG_REPO }}:${TAG})
+          (cd k8s/services/user-service/overlays/prod && \
+            kustomize edit set image bookstore-user-service=${{ env.ECR_REGISTRY }}/${{ env.USER_REPO }}:${TAG})
+          (cd k8s/services/notification-service/overlays/prod && \
+            kustomize edit set image bookstore-notification-service=${{ env.ECR_REGISTRY }}/${{ env.NOTIFICATION_REPO }}:${TAG})
+          (cd k8s/services/order-service/overlays/prod && \
+            kustomize edit set image bookstore-order-service=${{ env.ECR_REGISTRY }}/${{ env.ORDER_REPO }}:${TAG})
+          (cd k8s/services/api-gateway/overlays/prod && \
+            kustomize edit set image bookstore-api-gateway=${{ env.ECR_REGISTRY }}/${{ env.API_GATEWAY_REPO }}:${TAG})
+
+      - name: Commit and push updated image tags
+        env:
+          TAG: ${{ needs.build-and-push.outputs.image-tag }}
+        run: |
+          git config user.email "ci-bot@github-actions"
+          git config user.name "GitHub Actions"
+          git add k8s/overlays/prod/kustomization.yaml \
+                  k8s/services/catalog-service/overlays/prod/kustomization.yaml \
+                  k8s/services/user-service/overlays/prod/kustomization.yaml \
+                  k8s/services/notification-service/overlays/prod/kustomization.yaml \
+                  k8s/services/order-service/overlays/prod/kustomization.yaml \
+                  k8s/services/api-gateway/overlays/prod/kustomization.yaml
+          # Skips the commit if kustomization.yaml did not actually change
+          git diff --staged --quiet && echo "No image tag changes." && exit 0
+          git commit -m "chore: bump image tags to ${TAG}"
+
+          # Retry with rebase: this job's checkout is a snapshot from when the
+          # job started, several minutes before this step runs (build+scan
+          # took ~15 min). Any other commit landed on this branch in that
+          # window makes a plain `git push` fail non-fast-forward -- hit this
+          # for real when two pushes landed close together and the first
+          # run's deploy job lost the race. Rebasing this commit onto
+          # whatever's actually on the branch now and retrying handles it
+          # without dropping the image-tag bump.
+          pushed=false
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              pushed=true
+              break
+            fi
+            echo "Push rejected (attempt $attempt/5) -- rebasing onto latest ${GITHUB_REF_NAME} and retrying..."
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            sleep 5
+          done
+          # Fail loudly on exhaustion -- silently finishing this step without
+          # the tag bump actually landing would mean ArgoCD keeps deploying
+          # stale images with zero indication anything went wrong.
+          if [ "$pushed" != "true" ]; then
+            echo "::error::Failed to push image tag bump after 5 rebase-and-retry attempts."
+            exit 1
+          fi

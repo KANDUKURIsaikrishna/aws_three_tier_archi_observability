@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD AppProject — Bookstore
+#
+# Both k8s/argocd/application.yaml (frontend) and
+# k8s/argocd/applicationset-microservices.yaml (the 5 backend services) used
+# to run under ArgoCD's built-in "default" AppProject, which imposes NO
+# restrictions at all: any source repo, any destination cluster/namespace,
+# any resource kind including cluster-scoped ones (ClusterRole, other
+# clusters' Namespaces, etc.). This project scopes both Applications down to
+# exactly what they actually use -- one repo, one cluster, the 6 namespaces
+# this platform actually deploys into, and the cluster-scoped kinds
+# (Namespace, StorageClass, ClusterSecretStore) any of them actually create.
+#
+# Applied by Terraform (kubectl_manifest.argocd_appproject in argocd.tf),
+# before the Application/ApplicationSet that reference it -- not a manual
+# step. It genuinely was manual-only for a while and got missed on a
+# from-scratch rebuild (OBS-058); see argocd.tf's comment for the history.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: bookstore
+  namespace: argocd
+spec:
+  description: Bookstore platform — frontend + 5 backend microservices
+
+  sourceRepos:
+    - https://github.com/KANDUKURIsaikrishna/aws_three_tier_code.git
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: bookstore
+    - server: https://kubernetes.default.svc
+      namespace: catalog
+    - server: https://kubernetes.default.svc
+      namespace: user
+    - server: https://kubernetes.default.svc
+      namespace: order
+    - server: https://kubernetes.default.svc
+      namespace: notification
+    - server: https://kubernetes.default.svc
+      namespace: gateway
+
+  # Omitting this entirely denies ALL cluster-scoped resources. Three kinds
+  # are actually synced by these Applications: Namespace (each service's own
+  # kustomize base includes a namespace.yaml), StorageClass
+  # (k8s/base/storageclass/gp3.yaml), and ClusterSecretStore (each service's
+  # external-secret.yaml points at one) -- everything else these apps deploy
+  # (Deployment, Service, ExternalSecret, NetworkPolicy, HPA, PDB, Job,
+  # Ingress, ...) is namespace-scoped and unaffected by this list. On a
+  # long-lived cluster this gap stayed invisible because these cluster-scoped
+  # resources already existed and never needed re-creating; it only surfaces
+  # on a from-scratch rebuild, which is how it was caught (OBS-058).
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: external-secrets.io
+      kind: ClusterSecretStore
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

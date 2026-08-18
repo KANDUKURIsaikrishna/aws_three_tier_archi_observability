@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bookstore-ingress
+  namespace: bookstore
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # Shared with k8s/services/api-gateway/base/ingress.yaml -- same
+    # group.name means the AWS Load Balancer Controller provisions ONE ALB
+    # for both Ingress objects, not two. No certificate-arn annotation on
+    # purpose -- the controller auto-discovers a matching ACM cert by host,
+    # see ../../../ingress-cert.tf.
+    alb.ingress.kubernetes.io/group.name: bookstore
+spec:
+  ingressClassName: alb
+  tls:
+    - hosts:
+        - bookstore.b17facebook.xyz
+  rules:
+    - host: bookstore.b17facebook.xyz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

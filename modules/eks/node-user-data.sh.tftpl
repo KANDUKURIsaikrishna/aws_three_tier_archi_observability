@@ -1,0 +1,132 @@
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==EKSBOUNDARY=="
+
+--==EKSBOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+#!/bin/bash
+set -ex
+exec >> /var/log/custom-node-setup.log 2>&1
+
+# -- node-exporter v1.8.2 as systemd --------------------------------------
+NE_VER="1.8.2"
+curl -sL \
+  "https://github.com/prometheus/node_exporter/releases/download/v$${NE_VER}/node_exporter-$${NE_VER}.linux-amd64.tar.gz" \
+  | tar xzf - -C /tmp --strip-components=1 --wildcards "*/node_exporter"
+install -m 755 /tmp/node_exporter /usr/local/bin/node_exporter
+id -u node_exporter &>/dev/null || useradd -r -s /bin/false node_exporter
+
+cat > /etc/systemd/system/node_exporter.service << 'NE_SVC'
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+[Service]
+User=node_exporter
+ExecStart=/usr/local/bin/node_exporter
+Restart=always
+RestartSec=5s
+[Install]
+WantedBy=multi-user.target
+NE_SVC
+
+systemctl daemon-reload
+systemctl enable --now node_exporter
+
+# -- Fluent Bit (container logs -> Loki on monitoring EC2) -----------------
+# baseurl has no /$basearch/ segment -- an earlier version of this file had
+# one, which 404'd against the real repo (confirmed live via `kubectl debug
+# node`: https://packages.fluentbit.io/amazonlinux/2/x86_64/repodata/... is
+# 404, .../amazonlinux/2/repodata/... -- no arch segment -- is 200, matching
+# Fluent Bit's own current docs). yum install silently failed on every node
+# this project has ever provisioned as a result: Fluent Bit was never
+# actually installed, so zero container logs ever reached Loki despite the
+# rest of the observability stack (node-exporter, kube-state-metrics,
+# cAdvisor, app-metrics) all working fine. See docs/TROUBLESHOOTING.md
+# OBS-050.
+cat > /etc/yum.repos.d/fluent-bit.repo << 'FB_REPO'
+[fluent-bit]
+name=Fluent Bit
+baseurl=https://packages.fluentbit.io/amazonlinux/2/
+gpgcheck=1
+gpgkey=https://packages.fluentbit.io/fluentbit.key
+enabled=1
+FB_REPO
+
+yum install -y fluent-bit
+
+# Discovered at boot via the EC2 API, not templated from Terraform: a
+# static loki_url baked in by templatefile() had to use the monitoring EC2's
+# PUBLIC Elastic IP (the only value available without a circular module
+# dependency -- see modules/eks/variables.tf's region variable comment), but
+# nodes are in private subnets, and traffic from a private subnet to another
+# instance's public IP within the same VPC doesn't route back cleanly (no
+# public-IP hairpinning) -- confirmed live: security group was correctly
+# scoped for VPC-internal traffic, but every connection attempt timed out
+# regardless. The monitoring EC2's actual private IP, discovered here, is
+# reachable directly. Retried: this node's own IAM policy for
+# ec2:DescribeInstances is created in the same apply as the node itself, so
+# early attempts can race IAM propagation the same way the monitoring EC2's
+# own secretsmanager:GetSecretValue call did (see OBS-050).
+LOKI_HOST=""
+for i in $(seq 1 10); do
+  LOKI_HOST=$(aws ec2 describe-instances --region "${region}" \
+    --filters "Name=tag:Name,Values=bookstore-monitoring" "Name=instance-state-name,Values=running" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null)
+  [ -n "$LOKI_HOST" ] && [ "$LOKI_HOST" != "None" ] && break
+  echo "Waiting to discover the monitoring EC2's private IP (attempt $i)..."
+  sleep 6
+done
+
+# Own cri parser definition, not relying on whatever the fluent-bit RPM's
+# default /etc/fluent-bit/parsers.conf happens to ship (version-dependent,
+# unverifiable without live access to a fresh box) -- this is the standard,
+# stable CRI log line format containerd writes on EKS 1.24+.
+cat > /etc/fluent-bit/parsers-custom.conf << 'PARSERS_EOF'
+[PARSER]
+    Name        cri
+    Format      regex
+    Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+    Time_Key    time
+    Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+PARSERS_EOF
+
+# Unquoted FBEOF: double-dollar in template becomes single-dollar in rendered script
+cat > /etc/fluent-bit/fluent-bit.conf << FBEOF
+[SERVICE]
+    Flush           5
+    Log_Level       warn
+    Parsers_File    /etc/fluent-bit/parsers-custom.conf
+
+[INPUT]
+    Name             tail
+    Path             /var/log/containers/*.log
+    # Filename encodes <pod>_<namespace>_<container>-<container_id>.log --
+    # surfaced into every record so namespace/pod/container are visible and
+    # filterable in Grafana's Loki Explore even without per-record Loki
+    # labels (which would need Fluent Bit reaching the Kubernetes/kubelet
+    # API for enrichment -- this process runs as a bare host systemd
+    # service, not a pod, so it has no in-cluster ServiceAccount token to
+    # authenticate with; same class of problem already solved for
+    # kube-state-metrics on the monitoring EC2, not replicated here yet).
+    Path_Key         filename
+    Tag              kube.*
+    Parser           cri
+    Refresh_Interval 5
+    Mem_Buf_Limit    10MB
+    Skip_Long_Lines  On
+    # Persists read-offset across a Fluent Bit restart/node reboot -- without
+    # this, a restart could re-tail already-shipped log files from the start
+    # and duplicate lines in Loki.
+    DB               /var/log/flb_kube.db
+
+[OUTPUT]
+    Name    loki
+    Match   *
+    Host    $${LOKI_HOST}
+    Port    3100
+    Labels  job=eks-containers,cluster=${cluster_name}
+FBEOF
+
+systemctl enable --now fluent-bit
+
+--==EKSBOUNDARY==--

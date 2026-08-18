@@ -1,0 +1,738 @@
+#!/bin/bash
+set -euo pipefail
+exec > /var/log/monitoring-init.log 2>&1
+
+REGION="${region}"
+CLUSTER_NAME="${cluster_name}"
+SECRET_NAME="${grafana_admin_secret_name}"
+MONITORING_BASIC_AUTH_SECRET_NAME="${monitoring_basic_auth_secret_name}"
+SMTP_SECRET_NAME="${alertmanager_smtp_secret_name}"
+NE_PORT="${ne_port}"
+
+# ── Install Docker + tools ────────────────────────────────────────────────────
+# docker-compose-plugin isn't in Ubuntu's default repos, only Docker's own.
+# See TROUBLESHOOTING.md OBS-033. apache2-utils is for htpasswd, used below
+# to bcrypt-hash the Prometheus/Alertmanager basic-auth password -- both
+# tools' --web.config.file format requires a bcrypt hash, not plaintext.
+apt-get update -y
+apt-get install -y ca-certificates curl gnupg jq awscli apache2-utils
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+ARCH=$(dpkg --print-architecture)
+CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+echo "deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $CODENAME stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+systemctl enable docker
+systemctl start docker
+
+# Docker's own apt repo (unlike docker.io) never adds a user to the docker
+# group. See TROUBLESHOOTING.md OBS-041.
+usermod -aG docker ubuntu
+
+# ── Install kubectl ───────────────────────────────────────────────────────────
+KUBECTL_VER="v1.31.0"
+curl -sL "https://dl.k8s.io/release/$${KUBECTL_VER}/bin/linux/amd64/kubectl" \
+  -o /usr/local/bin/kubectl
+chmod +x /usr/local/bin/kubectl
+
+# ── Directory structure ───────────────────────────────────────────────────────
+mkdir -p /opt/monitoring/{prometheus/{targets,rules},grafana/provisioning/{datasources,dashboards},loki}
+
+# ── Grafana admin password from Secrets Manager ───────────────────────────────
+# Retried: this instance's IAM role policy is created in the same apply as
+# the instance itself, and IAM changes aren't instantly consistent -- the
+# very first boot can hit this call before the policy has propagated.
+# Confirmed live: AccessDeniedException on secretsmanager:GetSecretValue
+# immediately after boot, same call succeeding seconds later with zero
+# config changes. Under set -e this killed the rest of the script (and so
+# the entire monitoring stack -- nothing after this line ever ran) with no
+# automatic retry, since user-data only runs once. See OBS-050.
+GRAFANA_PASSWORD=""
+for i in $(seq 1 20); do
+  GRAFANA_PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id "$SECRET_NAME" \
+    --region "$REGION" \
+    --query SecretString \
+    --output text 2>/dev/null) && break
+  echo "Waiting for IAM policy propagation before retrying secretsmanager get-secret-value (attempt $i)..."
+  sleep 6
+done
+if [ -z "$GRAFANA_PASSWORD" ]; then
+  echo "FATAL: could not fetch $SECRET_NAME after 20 attempts" >&2
+  exit 1
+fi
+
+# Write to temp file so background dashboard importer can read it
+echo "$GRAFANA_PASSWORD" > /run/grafana-pass
+chmod 600 /run/grafana-pass
+
+# ── Prometheus/Alertmanager basic-auth password from Secrets Manager ──────────
+# Same IAM-propagation race as the Grafana password above -- same retry loop.
+# Neither tool ships with its own auth; without this they're wide open to
+# anyone in admin_cidr_blocks with zero login required (see TROUBLESHOOTING.md
+# OBS-063). htpasswd bcrypt-hashes it below for each tool's --web.config.file;
+# Grafana's own datasource config gets the plaintext so its dashboard queries
+# (which go over this same auth now, not the public internet) keep working.
+MONITORING_BASIC_AUTH_PASSWORD=""
+for i in $(seq 1 20); do
+  MONITORING_BASIC_AUTH_PASSWORD=$(aws secretsmanager get-secret-value \
+    --secret-id "$MONITORING_BASIC_AUTH_SECRET_NAME" \
+    --region "$REGION" \
+    --query SecretString \
+    --output text 2>/dev/null) && break
+  echo "Waiting for IAM policy propagation before retrying secretsmanager get-secret-value (attempt $i)..."
+  sleep 6
+done
+if [ -z "$MONITORING_BASIC_AUTH_PASSWORD" ]; then
+  echo "FATAL: could not fetch $MONITORING_BASIC_AUTH_SECRET_NAME after 20 attempts" >&2
+  exit 1
+fi
+MONITORING_BASIC_AUTH_HASH=$(htpasswd -nbBC 10 admin "$MONITORING_BASIC_AUTH_PASSWORD" | cut -d: -f2)
+
+# ── Alertmanager SES SMTP credentials from Secrets Manager ────────────────────
+# Same IAM-propagation race as the Grafana password above -- same retry loop.
+SMTP_SECRET_JSON=""
+for i in $(seq 1 20); do
+  SMTP_SECRET_JSON=$(aws secretsmanager get-secret-value \
+    --secret-id "$SMTP_SECRET_NAME" \
+    --region "$REGION" \
+    --query SecretString \
+    --output text 2>/dev/null) && break
+  echo "Waiting for IAM policy propagation before retrying secretsmanager get-secret-value for $SMTP_SECRET_NAME (attempt $i)..."
+  sleep 6
+done
+if [ -z "$SMTP_SECRET_JSON" ]; then
+  echo "FATAL: could not fetch $SMTP_SECRET_NAME after 20 attempts" >&2
+  exit 1
+fi
+SMTP_HOST=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_HOST)
+SMTP_PORT=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_PORT)
+SMTP_USERNAME=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_USERNAME)
+SMTP_PASSWORD=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_PASSWORD)
+SMTP_FROM=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_FROM)
+SMTP_TO=$(echo "$SMTP_SECRET_JSON" | jq -r .SMTP_TO)
+
+# ── kubeconfig for kube-state-metrics Docker container ───────────────────────
+# /opt/monitoring/kube, not /root/.kube (0700, blocks the container's
+# non-root user). Static bearer token refreshed by cron. See OBS-033.
+# Restarts kube-state-metrics on every refresh -- it loads the kubeconfig
+# once at start and never re-reads it, so a stale token otherwise sticks
+# forever. See OBS-042. `|| true`: first run predates the container existing.
+mkdir -p /opt/monitoring/kube
+cat > /usr/local/bin/refresh-kube-token.sh << REFRESH_EOF
+#!/bin/bash
+set -euo pipefail
+REGION="$REGION"
+CLUSTER_NAME="$CLUSTER_NAME"
+ENDPOINT=\$(aws eks describe-cluster --region "\$REGION" --name "\$CLUSTER_NAME" --query cluster.endpoint --output text)
+CA=\$(aws eks describe-cluster --region "\$REGION" --name "\$CLUSTER_NAME" --query cluster.certificateAuthority.data --output text)
+TOKEN=\$(aws eks get-token --region "\$REGION" --cluster-name "\$CLUSTER_NAME" --output json | python3 -c "import json,sys; print(json.load(sys.stdin)['status']['token'])")
+cat > /opt/monitoring/kube/config << CONF_EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: \$ENDPOINT
+    certificate-authority-data: \$CA
+  name: \$CLUSTER_NAME
+contexts:
+- context:
+    cluster: \$CLUSTER_NAME
+    user: \$CLUSTER_NAME
+  name: \$CLUSTER_NAME
+current-context: \$CLUSTER_NAME
+users:
+- name: \$CLUSTER_NAME
+  user:
+    token: \$TOKEN
+CONF_EOF
+chmod 644 /opt/monitoring/kube/config
+docker restart kube-state-metrics || true
+
+# Plain token file for Prometheus's kubelet scrape job (bearer_token_file) --
+# Prometheus re-reads this on every scrape, no restart needed.
+echo -n "\$TOKEN" > /opt/monitoring/kube/token
+chmod 644 /opt/monitoring/kube/token
+REFRESH_EOF
+chmod +x /usr/local/bin/refresh-kube-token.sh
+/usr/local/bin/refresh-kube-token.sh
+echo "*/10 * * * * root /usr/local/bin/refresh-kube-token.sh" > /etc/cron.d/kube-token-refresh
+
+# ── Node-discovery script (cron updates Prometheus file_sd targets) ───────────
+# Terraform substitutes ${region}, ${cluster_name}, ${ne_port} at apply time
+# so the written script has hardcoded values — no env vars needed at runtime.
+cat > /usr/local/bin/update-prom-targets.sh << 'SCRIPT_EOF'
+#!/bin/bash
+REGION="${region}"
+CLUSTER_NAME="${cluster_name}"
+NE_PORT="${ne_port}"
+KUBELET_PORT="${kubelet_port}"
+
+NODE_IPS=$(aws ec2 describe-instances \
+  --region "$REGION" \
+  --filters \
+    "Name=tag:eks:cluster-name,Values=$CLUSTER_NAME" \
+    "Name=instance-state-name,Values=running" \
+  --query 'Reservations[*].Instances[*].PrivateIpAddress' \
+  --output text | tr '\t\n' ' ' | xargs)
+
+build_json() {
+  local port=$1
+  local first=true
+  printf '['
+  for ip in $NODE_IPS; do
+    [ "$first" = "false" ] && printf ','
+    printf '{"targets":["%s:%s"],"labels":{"cluster":"%s"}}' \
+      "$ip" "$port" "$CLUSTER_NAME"
+    first=false
+  done
+  printf ']'
+}
+
+build_json "$NE_PORT" > /opt/monitoring/prometheus/targets/ne.json
+build_json "$KUBELET_PORT" > /opt/monitoring/prometheus/targets/kubelet.json
+SCRIPT_EOF
+
+chmod +x /usr/local/bin/update-prom-targets.sh
+/usr/local/bin/update-prom-targets.sh
+
+# Refresh every 5 minutes (handles node replacements / scale events)
+echo "*/5 * * * * root /usr/local/bin/update-prom-targets.sh" > /etc/cron.d/prom-targets
+
+# Prometheus's own basic-auth password, as a file Prometheus's config can
+# point `password_file` at (OBS-063) -- kept out of prometheus.yml itself
+# (below, deliberately a QUOTED heredoc: its relabel_configs use $1/$2/$3
+# regex backreferences that a bash-expanding heredoc would silently mangle,
+# so the password can't be interpolated inline there the way alertmanager.yml
+# does with $SMTP_* above -- a separate file sidesteps that entirely).
+echo "$MONITORING_BASIC_AUTH_PASSWORD" > /opt/monitoring/prometheus/basic-auth-password
+chmod 600 /opt/monitoring/prometheus/basic-auth-password
+
+# ── Prometheus config ─────────────────────────────────────────────────────────
+cat > /opt/monitoring/prometheus/prometheus.yml << 'PROM_EOF'
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+alerting:
+  alertmanagers:
+    - basic_auth:
+        username: admin
+        password_file: /etc/prometheus/basic-auth-password
+      static_configs:
+        - targets: ['alertmanager:9093']
+
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+scrape_configs:
+  - job_name: 'prometheus'
+    basic_auth:
+      username: admin
+      password_file: /etc/prometheus/basic-auth-password
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'kube-state-metrics'
+    static_configs:
+      - targets: ['kube-state-metrics:8080']
+
+  - job_name: 'node-exporter'
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/ne.json']
+        refresh_interval: 5m
+
+  # Real per-pod CPU/memory usage (kube-state-metrics only has
+  # requests/limits/status). bearer_token_file auto-refreshes, no restart.
+  - job_name: 'kubelet-cadvisor'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/kube/token
+    metrics_path: /metrics/cadvisor
+    file_sd_configs:
+      - files: ['/etc/prometheus/targets/kubelet.json']
+        refresh_interval: 5m
+
+  # App-level /metrics (prom-client, per-service HTTP counters/histograms).
+  # Pod IPs aren't reachable from outside the cluster network, so this
+  # scrapes through the API server's pod-proxy instead -- same 443 route
+  # already open to the API server, no new SG rule needed. Only pods
+  # annotated prometheus.io/scrape: "true" are kept (see the 6 service
+  # Deployments/Rollout in k8s/services/*/base + k8s/base/backend).
+  - job_name: 'app-metrics'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/kube/token
+    kubernetes_sd_configs:
+      - role: pod
+        api_server: ${eks_api_server}
+        tls_config:
+          insecure_skip_verify: true
+        bearer_token_file: /etc/prometheus/kube/token
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_name, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+);(.+);(.+)
+        replacement: /api/v1/namespaces/$1/pods/$2:$3/proxy/metrics
+      - target_label: __address__
+        replacement: ${eks_api_host}
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        target_label: app
+PROM_EOF
+
+# ── Prometheus web auth (OBS-063) ─────────────────────────────────────────────
+# Unquoted heredoc: $MONITORING_BASIC_AUTH_HASH is expanded by bash at write
+# time. Referenced by --web.config.file in the prometheus service below.
+cat > /opt/monitoring/prometheus/web.yml << WEB_EOF
+basic_auth_users:
+  admin: $MONITORING_BASIC_AUTH_HASH
+WEB_EOF
+
+# ── Prometheus alerting rules ─────────────────────────────────────────────────
+cat > /opt/monitoring/prometheus/rules/bookstore.yml << 'RULES_EOF'
+groups:
+  - name: bookstore
+    rules:
+      - alert: NodeDown
+        expr: up{job="node-exporter"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "EKS node {{ $labels.instance }} unreachable"
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU > 80% on {{ $labels.instance }}: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: HighMemoryUsage
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory > 85% on {{ $labels.instance }}: {{ $value | printf \"%.1f\" }}%"
+
+      - alert: PodCrashLooping
+        expr: rate(kube_pod_container_status_restarts_total[15m]) * 60 * 15 > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} crash-looping"
+
+      - alert: KubeStateMetricsDown
+        expr: up{job="kube-state-metrics"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-state-metrics is unreachable — no Kubernetes metrics"
+
+      # Real per-pod usage (kubelet cAdvisor, see OBS-044) -- catches a
+      # single runaway pod, not just whole-node pressure like HighCPUUsage
+      # above. `for: 1m` deliberately short (vs. 10m on the node-level
+      # alerts) so this is demo-friendly: a short CPU-stress pod trips it
+      # within a couple of scrape cycles instead of requiring a sustained
+      # 10-minute load.
+      - alert: HighPodCPUUsage
+        expr: sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[2m])) > 0.3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} CPU usage {{ $value | printf \"%.2f\" }} cores"
+
+      - alert: HighPodMemoryUsage
+        expr: sum by (namespace, pod) (container_memory_working_set_bytes{container!="", container!="POD"}) > 200 * 1024 * 1024
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} memory usage {{ $value | humanize1024 }}B"
+
+      # Traffic, from each service's own prom-client http_requests_total
+      # counter (see OBS-045 for how this gets scraped). Threshold is low
+      # on purpose -- this app has near-zero idle traffic, so a modest load
+      # test trips it fast without risking a false-positive at rest.
+      - alert: HighRequestRate
+        expr: sum by (service) (rate(http_requests_total[2m])) > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} request rate {{ $value | printf \"%.1f\" }} req/s"
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[2m])) / sum(rate(http_requests_total[2m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "5xx error rate {{ $value | humanizePercentage }} across app-metrics"
+RULES_EOF
+
+# ── Alertmanager config ───────────────────────────────────────────────────────
+mkdir -p /opt/monitoring/alertmanager
+
+# Unquoted heredoc: SMTP_* are expanded by bash at write time (same trick as
+# the LOKI_HOST/GRAFANA_PASSWORD blocks above). {{ .Status }}-style syntax
+# below is Alertmanager's own Go templating, evaluated later at notification
+# time, not by bash now -- no $ prefix on any of it, so bash leaves it alone.
+cat > /opt/monitoring/alertmanager/alertmanager.yml << AM_EOF
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: '$SMTP_HOST:$SMTP_PORT'
+  smtp_from: '$SMTP_FROM'
+  smtp_auth_username: '$SMTP_USERNAME'
+  smtp_auth_password: '$SMTP_PASSWORD'
+  smtp_require_tls: true
+
+route:
+  receiver: 'default-webhook'
+  group_by: ['alertname', 'severity', 'cluster']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: 'critical-webhook'
+      repeat_interval: 1h
+    - matchers:
+        - severity = "warning"
+      receiver: 'default-webhook'
+      repeat_interval: 6h
+
+receivers:
+  - name: 'default-webhook'
+    # Replace with your real endpoint — Slack, PagerDuty, SNS, etc.
+    # Slack example (uncomment and set SLACK_WEBHOOK_URL):
+    # slack_configs:
+    #   - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    #     channel: '#bookstore-alerts'
+    #     title: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ "\n" }}{{ end }}'
+    #     send_resolved: true
+    webhook_configs:
+      - url: 'http://localhost:5001/'
+        send_resolved: true
+    email_configs:
+      - to: '$SMTP_TO'
+        send_resolved: true
+        headers:
+          Subject: '[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+
+  - name: 'critical-webhook'
+    webhook_configs:
+      - url: 'http://localhost:5001/'
+        send_resolved: true
+    email_configs:
+      - to: '$SMTP_TO'
+        send_resolved: true
+        headers:
+          Subject: '[CRITICAL] {{ .GroupLabels.alertname }}'
+
+inhibit_rules:
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ['alertname', 'instance']
+AM_EOF
+
+# ── Alertmanager web auth (OBS-063) ───────────────────────────────────────────
+# Same shared basic-auth credential as Prometheus's web.yml above --
+# referenced by --web.config.file in the alertmanager service below.
+cat > /opt/monitoring/alertmanager/web.yml << WEB_EOF
+basic_auth_users:
+  admin: $MONITORING_BASIC_AUTH_HASH
+WEB_EOF
+
+# ── Loki config ───────────────────────────────────────────────────────────────
+cat > /opt/monitoring/loki/config.yaml << 'LOKI_EOF'
+auth_enabled: false
+server:
+  http_listen_port: 3100
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+limits_config:
+  allow_structured_metadata: false
+LOKI_EOF
+
+# ── Grafana datasources ───────────────────────────────────────────────────────
+# Unquoted heredoc (was quoted 'GRAFANA_DS_EOF' -- switched so
+# $MONITORING_BASIC_AUTH_PASSWORD expands): Prometheus and Alertmanager both
+# now require basic auth (OBS-063), so Grafana's own queries to them need
+# the same credential or every dashboard panel breaks with a 401. This goes
+# in secureJsonData (Grafana encrypts it at rest, same mechanism as any
+# other datasource password), not jsonData.
+cat > /opt/monitoring/grafana/provisioning/datasources/datasources.yaml << GRAFANA_DS_EOF
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    basicAuth: true
+    basicAuthUser: admin
+    secureJsonData:
+      basicAuthPassword: $MONITORING_BASIC_AUTH_PASSWORD
+    jsonData:
+      alertmanagerUid: alertmanager
+  - name: Loki
+    type: loki
+    uid: loki
+    url: http://loki:3100
+    editable: false
+  - name: Alertmanager
+    type: alertmanager
+    uid: alertmanager
+    url: http://alertmanager:9093
+    editable: false
+    basicAuth: true
+    basicAuthUser: admin
+    secureJsonData:
+      basicAuthPassword: $MONITORING_BASIC_AUTH_PASSWORD
+    jsonData:
+      implementation: prometheus
+GRAFANA_DS_EOF
+
+# ── Grafana dashboard provisioner config ──────────────────────────────────────
+cat > /opt/monitoring/grafana/provisioning/dashboards/dashboards.yaml << 'DASH_PROV_EOF'
+apiVersion: 1
+providers:
+  - name: default
+    orgId: 1
+    folder: Bookstore
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+DASH_PROV_EOF
+
+# ── Docker Compose ────────────────────────────────────────────────────────────
+# Unquoted heredoc: $GRAFANA_PASSWORD is expanded by bash at write time
+cat > /opt/monitoring/docker-compose.yml << COMPOSE_EOF
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - /opt/monitoring/prometheus:/etc/prometheus
+      - /opt/monitoring/kube:/etc/prometheus/kube:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.config.file=/etc/prometheus/web.yml'
+    restart: unless-stopped
+
+  kube-state-metrics:
+    image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+    container_name: kube-state-metrics
+    # user: "0:0" -- the image's own /root (baked in, not affected by the
+    # host-side mount) is 0700, so the container's default non-root user
+    # can't traverse into /root/.kube regardless of the mounted file's own
+    # permissions. Running as root avoids fighting the image's own layout.
+    user: "0:0"
+    volumes:
+      - /opt/monitoring/kube:/root/.kube:ro
+    command:
+      - '--kubeconfig=/root/.kube/config'
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - /opt/monitoring/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/config.yaml
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - /opt/monitoring/alertmanager:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--web.config.file=/etc/alertmanager/web.yml'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=$GRAFANA_PASSWORD
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - /opt/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  loki_data:
+  alertmanager_data:
+COMPOSE_EOF
+
+# ── Start the stack ───────────────────────────────────────────────────────────
+cd /opt/monitoring
+docker compose up -d
+
+# ── Import Grafana dashboards in background (after Grafana is healthy) ────────
+cat > /usr/local/bin/import-grafana-dashboards.sh << 'IMPORT_EOF'
+#!/bin/bash
+set -euo pipefail
+exec > /var/log/grafana-dashboard-import.log 2>&1
+
+GRAFANA="http://localhost:3000"
+PASS=$(cat /run/grafana-pass)
+# This script runs as its own process (not the same shell as the main
+# boot script above), so it re-reads the Prometheus basic-auth password
+# from the file that script wrote (OBS-063), same pattern as PASS above.
+PROM_PASS=$(cat /opt/monitoring/prometheus/basic-auth-password)
+
+for i in $(seq 1 36); do
+  curl -sf "$GRAFANA/api/health" 2>/dev/null | grep -q '"database": "ok"' && break
+  echo "Waiting for Grafana... attempt $i"
+  sleep 10
+done
+
+import_dash() {
+  # Large dashboard JSON (e.g. #1860, ~683KB) blows Linux's 128KB per-arg
+  # exec limit if passed inline to curl -d -- use -d @file instead. OBS-040.
+  local id=$1 rev=$2 ds_input=$3
+  local raw="/tmp/dash-$id.json"
+  local payload="/tmp/payload-$id.json"
+  if ! curl -sf "https://grafana.com/api/dashboards/$id/revisions/$rev/download" -o "$raw"; then
+    echo "Failed to download dashboard $id"
+    return 0
+  fi
+  python3 -c "
+import json
+d = json.load(open('$raw'))
+payload = {'dashboard': d, 'overwrite': True, 'inputs': [{'name': '$ds_input', 'type': 'datasource', 'pluginId': 'prometheus', 'value': 'prometheus'}], 'folderId': 0}
+json.dump(payload, open('$payload', 'w'))
+"
+  if ! curl -sf -X POST "$GRAFANA/api/dashboards/import" \
+    -u "admin:$PASS" \
+    -H "Content-Type: application/json" \
+    -d "@$payload" > /dev/null; then
+    echo "Failed to import dashboard $id"
+    return 0
+  fi
+  echo "Imported Grafana dashboard $id (rev $rev)"
+}
+
+import_dash 1860 37 "DS_PROMETHEUS"  # Node Exporter Full
+
+# Dashboard 1860's $job/$node template variables save with no default value
+# (empty at import time, before Prometheus has scraped anything) and don't
+# self-populate afterward -- every panel interpolates job="" and stays
+# permanently empty even once real data exists, until something explicitly
+# sets a value. UID is stable across imports (baked into the dashboard JSON
+# itself by grafana.com), so it's safe to hardcode here.
+for i in $(seq 1 12); do
+  curl -sf -G -u "admin:$PROM_PASS" "http://localhost:9090/api/v1/query" --data-urlencode 'query=node_uname_info' \
+    2>/dev/null | grep -q '"instance"' && break
+  sleep 10
+done
+DASH_JSON=$(curl -sf -u "admin:$PASS" "$GRAFANA/api/dashboards/uid/rYdddlPWk")
+NODE_INSTANCE=$(curl -sf -G -u "admin:$PROM_PASS" "http://localhost:9090/api/v1/query" --data-urlencode 'query=node_uname_info' \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['result'][0]['metric']['instance'])" 2>/dev/null || echo "")
+if [ -n "$NODE_INSTANCE" ]; then
+  echo "$DASH_JSON" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)['dashboard']
+for v in d.get('templating', {}).get('list', []):
+    if v['name'] == 'job':
+        v['current'] = {'text': 'node-exporter', 'value': 'node-exporter'}
+    if v['name'] == 'node':
+        v['current'] = {'text': '$NODE_INSTANCE', 'value': '$NODE_INSTANCE'}
+json.dump({'dashboard': d, 'overwrite': True, 'folderId': 0}, open('/tmp/node-exporter-fix.json', 'w'))
+"
+  curl -sf -X POST "$GRAFANA/api/dashboards/db" -u "admin:$PASS" \
+    -H "Content-Type: application/json" -d @/tmp/node-exporter-fix.json > /dev/null \
+    && echo "Fixed Node Exporter Full's stuck job/node variables" \
+    || echo "Failed to fix Node Exporter Full variables"
+fi
+
+# Dashboard 315 ("Kubernetes cluster monitoring") is dropped -- its $Node
+# variable queries the label `kubernetes_io_hostname`, which doesn't exist
+# anywhere in this Prometheus at all (confirmed: zero matching series), a
+# real convention mismatch with this kube-state-metrics/cAdvisor setup, not
+# an import-timing artifact. Replaced by a small custom dashboard below,
+# built against metrics this setup actually exposes.
+cat > /opt/monitoring/grafana/provisioning/dashboards/pod-node-resources.json << 'CUSTOM_DASH_EOF'
+${custom_dashboard_json}
+CUSTOM_DASH_EOF
+
+# Cluster-wide view (nodes/pods/deployments/alerts) alongside the per-pod
+# resource dashboard above -- same file-provisioning approach, no API call.
+cat > /opt/monitoring/grafana/provisioning/dashboards/k8s-cluster-overview.json << 'CLUSTER_DASH_EOF'
+${cluster_dashboard_json}
+CLUSTER_DASH_EOF
+
+echo "Dashboard import complete"
+IMPORT_EOF
+
+chmod +x /usr/local/bin/import-grafana-dashboards.sh
+nohup /usr/local/bin/import-grafana-dashboards.sh &

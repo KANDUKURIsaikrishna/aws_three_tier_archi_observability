@@ -1,0 +1,67 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: gateway
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-gateway-policy
+  namespace: gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  # ipBlock, not namespaceSelector: since ingress-nginx was retired and
+  # replaced with the AWS Load Balancer Controller (target-type=ip — see
+  # k8s/services/api-gateway/base/ingress.yaml), traffic no longer arrives
+  # from a pod in some "ingress-nginx" namespace at all -- the ALB connects
+  # straight to this pod's real ENI IP from its own ENIs in the VPC, which
+  # NetworkPolicy can only match by CIDR, same reasoning as the egress
+  # rules below.
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 170.20.0.0/16
+      ports:
+        - port: 3000
+  # ports below use 3000 (the pods' real containerPort), not 80 (the
+  # Service port). NetworkPolicy egress matching is against the actual
+  # destination pod port after kube-proxy's Service DNAT, not the Service's
+  # own listed port -- an earlier version of this file used 80 here, which
+  # would silently block all api-gateway -> microservice traffic the moment
+  # a NetworkPolicy-enforcing CNI is turned on. See docs/TROUBLESHOOTING.md
+  # OBS-049.
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: catalog
+      ports:
+        - port: 3000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: user
+      ports:
+        - port: 3000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: order
+      ports:
+        - port: 3000
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

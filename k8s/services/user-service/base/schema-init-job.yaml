@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: user-schema-init
+  namespace: user
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      # No K8s API access needed by this workload -- don't auto-mount a
+      # token nothing here uses.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: Never
+      containers:
+        - name: schema-init
+          image: mysql:8.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              mysql -h "$ADMIN_DB_HOST" -u "$ADMIN_DB_USERNAME" -p"$ADMIN_DB_PASSWORD" <<SQL
+              CREATE DATABASE IF NOT EXISTS user_db;
+
+              CREATE TABLE IF NOT EXISTS user_db.users (
+                id            INT AUTO_INCREMENT PRIMARY KEY,
+                email         VARCHAR(255) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                -- 'customer' by default; the very first account ever
+                -- registered becomes 'admin' automatically (see
+                -- services/user-service/app.js's /auth/register handler) --
+                -- catalog-mutating routes (POST/PUT/DELETE /books) require
+                -- this role, closing the "any registered user can wipe the
+                -- catalog" gap without needing a separate invite/promotion
+                -- flow for what's still a single-operator deployment.
+                role          VARCHAR(20)  NOT NULL DEFAULT 'customer',
+                created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+              );
+
+              -- Refresh tokens live in the same schema as users, unlike the
+              -- soft (unenforced) cross-service references used elsewhere in
+              -- this project (order_db.orders.user_id, etc.) -- there's no
+              -- schema boundary being crossed here, so a real FOREIGN KEY is
+              -- the correct, standard choice: ON DELETE CASCADE means a
+              -- deleted user's outstanding refresh tokens are cleaned up
+              -- automatically, not left as orphaned rows. Only the SHA-256
+              -- hash of each refresh token is ever stored, never the token
+              -- itself -- see services/user-service/app.js.
+              CREATE TABLE IF NOT EXISTS user_db.refresh_tokens (
+                id         INT AUTO_INCREMENT PRIMARY KEY,
+                user_id    INT NOT NULL,
+                token_hash CHAR(64) NOT NULL UNIQUE,
+                expires_at TIMESTAMP NOT NULL,
+                revoked_at TIMESTAMP NULL DEFAULT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_refresh_tokens_user FOREIGN KEY (user_id) REFERENCES user_db.users(id) ON DELETE CASCADE
+              );
+
+              CREATE USER IF NOT EXISTS 'user_service_user'@'%' IDENTIFIED BY '$USER_DB_PASSWORD';
+              GRANT SELECT, INSERT, UPDATE, DELETE ON user_db.* TO 'user_service_user'@'%';
+              FLUSH PRIVILEGES;
+              SQL
+          env:
+            - name: ADMIN_DB_HOST
+              valueFrom:
+                secretKeyRef: { name: admin-db-secret, key: DB_HOST }
+            - name: ADMIN_DB_USERNAME
+              valueFrom:
+                secretKeyRef: { name: admin-db-secret, key: DB_USERNAME }
+            - name: ADMIN_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: admin-db-secret, key: DB_PASSWORD }
+            - name: USER_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: user-db-secret, key: DB_PASSWORD }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

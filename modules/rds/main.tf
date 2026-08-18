@@ -1,0 +1,139 @@
+resource "random_password" "db_password" {
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}?"
+}
+
+resource "aws_secretsmanager_secret" "db_credentials" {
+  name                    = "/bookstore/db-credentials"
+  recovery_window_in_days = 0 # 0 = force delete on destroy, no soft-delete window — see TF-012
+
+  dynamic "replica" {
+    for_each = var.secondary_region != "" ? [var.secondary_region] : []
+    content {
+      region = replica.value
+    }
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "db_credentials" {
+  secret_id = aws_secretsmanager_secret.db_credentials.id
+  secret_string = jsonencode({
+    DB_USERNAME = var.db_username
+    DB_PASSWORD = random_password.db_password.result
+    # .address, NOT .endpoint — .endpoint is "host:port" combined, which
+    # every consumer of DB_HOST (mysql2's `host:` param, the mysql CLI's
+    # `-h` flag) fails to resolve as a hostname. Confirmed live: this exact
+    # bug meant no DB connection in this project's history ever actually
+    # worked. See TROUBLESHOOTING.md OBS-017. (outputs.tf's rds_endpoint
+    # output has the same fix, but that's a SEPARATE reference — this one
+    # had to be fixed independently since it doesn't go through the output.)
+    DB_HOST = aws_db_instance.db.address
+  })
+}
+
+resource "aws_db_subnet_group" "rds_subnet_group" {
+  name       = "rds-subnet-group"
+  subnet_ids = var.db_subnet_ids
+  tags       = { Name = "rds-subnet-group" }
+}
+
+resource "aws_db_instance" "db" {
+  identifier            = var.db_identifier
+  engine                = var.db_engine
+  engine_version        = var.db_engine_version
+  instance_class        = var.db_instance_class
+  allocated_storage     = var.db_allocated_storage
+  max_allocated_storage = var.max_allocated_storage == 0 ? null : var.max_allocated_storage
+
+  db_name  = var.db_name
+  username = var.db_username
+  password = random_password.db_password.result
+
+  # ── Storage ──────────────────────────────────────────────────────
+  # gp3 is both cheaper and faster per provisioned GB than the gp2 default
+  # aws_db_instance falls back to when storage_type is left unset.
+  storage_type = "gp3"
+
+  # ── High Availability ─────────────────────────────────────────────
+  multi_az = var.multi_az
+
+  # ── Encryption at rest ────────────────────────────────────────────
+  storage_encrypted = true
+  kms_key_id        = var.kms_key_arn # leave null → uses AWS-managed key
+
+  # ── Backups ───────────────────────────────────────────────────────
+  backup_retention_period = var.backup_retention_period
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "Mon:04:00-Mon:05:00"
+
+  # ── Final snapshot on destroy ─────────────────────────────────────
+  # skip_final_snapshot=true avoids "snapshot already exists" errors on
+  # repeated destroy/apply cycles. RDS automated backups (retention=7d)
+  # already provide point-in-time recovery for production use.
+  skip_final_snapshot       = var.skip_final_snapshot
+  final_snapshot_identifier = var.skip_final_snapshot ? null : "${var.db_identifier}-final-snapshot"
+  deletion_protection       = var.deletion_protection
+
+  # ── Performance & Monitoring ──────────────────────────────────────
+  # Performance Insights not supported on db.t3.micro
+  performance_insights_enabled    = false
+  monitoring_interval             = 60
+  monitoring_role_arn             = aws_iam_role.rds_monitoring.arn
+  enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
+
+  publicly_accessible    = false
+  vpc_security_group_ids = [var.db_security_group_id]
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
+
+  tags = { Name = var.db_identifier }
+
+  # Ensures the retention-bounded log groups above exist before RDS's own
+  # auto-create-on-first-write would otherwise make them with no expiry.
+  depends_on = [aws_cloudwatch_log_group.rds]
+}
+
+# ── CloudWatch log retention for the 3 exported log streams ──────────────────
+# enabled_cloudwatch_logs_exports above auto-creates these log groups with no
+# expiry if Terraform doesn't manage them first — unbounded storage cost. RDS
+# creates the group itself only if it doesn't already exist, so declaring it
+# here (and ordering it before the DB instance) makes retention apply from
+# the first log line instead of needing a later import.
+resource "aws_cloudwatch_log_group" "rds" {
+  for_each          = toset(["error", "general", "slowquery"])
+  name              = "/aws/rds/instance/${var.db_identifier}/${each.value}"
+  retention_in_days = 30
+}
+
+# Enhanced Monitoring IAM role
+resource "aws_iam_role" "rds_monitoring" {
+  name = "${var.db_identifier}-rds-monitoring"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "monitoring.rds.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "rds_monitoring" {
+  role       = aws_iam_role.rds_monitoring.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+}
+
+# ── Secret Rotation ───────────────────────────────────────────────────────────
+# Requires a rotation Lambda ARN. Deploy the AWS-provided single-user rotation
+# Lambda (SecretsManager-RDSMySQLRotationSingleUser) and pass its ARN via
+# var.rotation_lambda_arn. Leave empty to skip rotation (demo/dev default).
+
+resource "aws_secretsmanager_secret_rotation" "db_credentials" {
+  count               = var.rotation_lambda_arn != "" ? 1 : 0
+  secret_id           = aws_secretsmanager_secret.db_credentials.id
+  rotation_lambda_arn = var.rotation_lambda_arn
+
+  rotation_rules {
+    automatically_after_days = var.rotation_days
+  }
+}

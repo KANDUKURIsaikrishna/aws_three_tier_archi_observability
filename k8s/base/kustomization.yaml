@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: bookstore
+
+resources:
+- storageclass/gp3.yaml
+- namespace.yaml
+- limitrange.yaml
+- secrets/external-secret.yaml
+- frontend/deployment.yaml
+- frontend/service.yaml
+- ingress/ingress.yaml
+- network-policy/network-policy.yaml
+- pdb/pdb.yaml
+- quota.yaml
+# monitoring/servicemonitor.yaml and monitoring/prometheus-rules.yaml
+# deliberately NOT included: monitoring.coreos.com/v1 CRDs (ServiceMonitor,
+# PrometheusRule) require the Prometheus Operator, which this cluster does not
+# run — Prometheus lives on a standalone EC2 instance instead (see
+# ARCHITECTURE.md). These aren't just inert, they actively FAIL an ArgoCD
+# sync: the K8s API can't validate an unknown resource type at all, and that
+# blocks the ENTIRE sync batch, not just these two resources — confirmed live
+# (ComparisonError/SyncFailed on a real bookstore Application, see
+# TROUBLESHOOTING.md OBS-012). monitoring/analysis-template.yaml was the same
+# category exception (argoproj.io/v1alpha1, Argo Rollouts' own CRD) but was
+# deleted along with the rest of the old backend monolith — it only ever
+# gated backend's canary rollout, which no longer exists.

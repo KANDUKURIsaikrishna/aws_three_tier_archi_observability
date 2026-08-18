@@ -1,0 +1,69 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD ApplicationSet — Bookstore Microservices
+#
+# One Application per entry in the list generator below. Each new microservice
+# plan (user-service, order-service, notification-service, api-gateway) adds
+# one more element here instead of a hand-written Application manifest.
+#
+# targetRevision is pinned to the `observability` branch while this platform
+# is under active development on that branch — switch to `main` (or delete
+# this override and let it inherit) once the work merges and CI's gated
+# deploy stage takes over image-tag bumps, matching k8s/argocd/application.yaml.
+#
+# Prerequisites: same as k8s/argocd/application.yaml (ArgoCD installed, repo
+# credentials registered if private), plus the scoped AppProject. Apply once:
+#   kubectl apply -f k8s/argocd/appproject.yaml
+#   kubectl apply -f k8s/argocd/applicationset-microservices.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: bookstore-microservices
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - service: catalog-service
+            namespace: catalog
+          - service: user-service
+            namespace: user
+          - service: notification-service
+            namespace: notification
+          - service: order-service
+            namespace: order
+          - service: api-gateway
+            namespace: gateway
+
+  template:
+    metadata:
+      name: '{{service}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: bookstore   # scoped AppProject, see k8s/argocd/appproject.yaml -- apply that first
+
+      source:
+        repoURL: https://github.com/KANDUKURIsaikrishna/aws_three_tier_code.git
+        targetRevision: observability
+        path: 'k8s/services/{{service}}/overlays/prod'
+        kustomize: {}
+
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

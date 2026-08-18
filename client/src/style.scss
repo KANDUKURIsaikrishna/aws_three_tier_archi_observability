@@ -1,0 +1,164 @@
+// Zero :focus rules existed anywhere in this file -- every interactive
+// element (button, link, input) relied entirely on unstyled UA defaults for
+// keyboard-focus visibility, unverified against this app's own custom
+// colors. One rule covering every interactive element by tag, rather than
+// per-class, so nothing added later silently falls outside it.
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid teal;
+  outline-offset: 2px;
+}
+
+.app {
+  min-height: 100vh;
+  padding: 0 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: center;
+
+  // Zero @media queries existed anywhere in this file. 0 100px side padding
+  // alone eats 200px on any viewport -- on a 375px phone that's over half
+  // the screen gone before content even starts.
+  @media (max-width: 600px) {
+    padding: 0 16px;
+  }
+
+  .nav {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 0;
+    border-bottom: 1px solid #eee;
+    margin-bottom: 30px;
+
+    .navBrand {
+      font-weight: bold;
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .navLinks {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      button {
+        border: none;
+        background: none;
+        cursor: pointer;
+        font-weight: bold;
+        color: teal;
+      }
+    }
+  }
+
+  .error {
+    color: rgb(242, 100, 100);
+  }
+
+  .success {
+    color: teal;
+  }
+
+  .addHome {
+    display: inline-block;
+    box-sizing: border-box;
+    min-height: 44px; // WCAG 2.5.5 touch-target minimum
+    padding: 10px 16px;
+    margin-top: 20px;
+    cursor: pointer;
+    border: none;
+    background-color: teal;
+    color: white;
+    font-weight: bold;
+    line-height: 24px;
+  }
+
+  h1 {
+    margin-bottom: 50px;
+  }
+
+  .books {
+    display: flex;
+    // No wrap meant every book squeezed into an equal-width column on any
+    // screen (flex: 1 on .book, no basis) -- a catalog of 5+ titles was
+    // unreadable on mobile, not just tight. flex-basis gives each card a
+    // real minimum width to wrap around instead of shrinking indefinitely.
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 24px;
+
+    .book {
+      flex: 1 1 220px;
+      max-width: 240px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+
+      img {
+        width: 200px;
+        height: 300px;
+        object-fit: cover;
+      }
+
+      // .update is a Link now (see FINDING-002 -- was invalid button>Link
+      // nesting), so touch-target sizing is shared here with button rather
+      // than living only on the `button` tag selector.
+      button,
+      .update {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        min-height: 44px; // WCAG 2.5.5 touch-target minimum -- was 3px 6px padding
+        padding: 10px 16px;
+        background-color: white;
+        cursor: pointer;
+      }
+      .delete {
+        border: 1px solid rgb(245, 191, 191);
+        color: rgb(242, 100, 100);
+      }
+      .update {
+        border: 1px solid rgb(204, 204, 243);
+        color: rgb(139, 139, 234);
+      }
+    }
+  }
+
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+
+    input {
+      width: 250px;
+      padding: 10px;
+      border: 1px solid gray;
+    }
+
+    textarea {
+      padding: 10px;
+    }
+
+    button {
+      border: none;
+      padding: 10px;
+      background-color: teal;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+  }
+}

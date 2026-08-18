@@ -20,6 +20,9 @@ concurrency:
 #   AWS_ROLE_ARN    — OIDC role; no static AWS keys anywhere
 #   API_URL         — api-gateway URL injected at frontend build time
 #   SEMGREP_APP_TOKEN (optional) — needed only if Semgrep Cloud is used
+#   SONAR_TOKEN          — SonarCloud auth token (sonarcloud.io → My Account → Security)
+#   SONAR_ORGANIZATION   — SonarCloud org key
+#   SONAR_PROJECT_KEY    — SonarCloud project key
 
 env:
   AWS_REGION:    us-west-1
@@ -84,8 +87,8 @@ jobs:
       - name: Install catalog-service dependencies
         run: cd services/catalog-service && npm ci
 
-      - name: Run catalog-service tests
-        run: cd services/catalog-service && npm test
+      - name: Run catalog-service tests (with coverage)
+        run: cd services/catalog-service && npm run test:coverage
 
       - name: npm audit — catalog-service production deps (fail on high/critical CVEs)
         run: cd services/catalog-service && npm audit --audit-level=high --omit=dev
@@ -93,8 +96,8 @@ jobs:
       - name: Install user-service dependencies
         run: cd services/user-service && npm ci
 
-      - name: Run user-service tests
-        run: cd services/user-service && npm test
+      - name: Run user-service tests (with coverage)
+        run: cd services/user-service && npm run test:coverage
 
       - name: npm audit — user-service production deps (fail on high/critical CVEs)
         run: cd services/user-service && npm audit --audit-level=high --omit=dev
@@ -102,8 +105,8 @@ jobs:
       - name: Install notification-service dependencies
         run: cd services/notification-service && npm ci
 
-      - name: Run notification-service tests
-        run: cd services/notification-service && npm test
+      - name: Run notification-service tests (with coverage)
+        run: cd services/notification-service && npm run test:coverage
 
       - name: npm audit — notification-service production deps (fail on high/critical CVEs)
         run: cd services/notification-service && npm audit --audit-level=high --omit=dev
@@ -111,8 +114,8 @@ jobs:
       - name: Install order-service dependencies
         run: cd services/order-service && npm ci
 
-      - name: Run order-service tests
-        run: cd services/order-service && npm test
+      - name: Run order-service tests (with coverage)
+        run: cd services/order-service && npm run test:coverage
 
       - name: npm audit — order-service production deps (fail on high/critical CVEs)
         run: cd services/order-service && npm audit --audit-level=high --omit=dev
@@ -120,8 +123,8 @@ jobs:
       - name: Install api-gateway dependencies
         run: cd services/api-gateway && npm ci
 
-      - name: Run api-gateway tests
-        run: cd services/api-gateway && npm test
+      - name: Run api-gateway tests (with coverage)
+        run: cd services/api-gateway && npm run test:coverage
 
       - name: npm audit — api-gateway production deps (fail on high/critical CVEs)
         run: cd services/api-gateway && npm audit --audit-level=high --omit=dev
@@ -129,8 +132,8 @@ jobs:
       - name: Install frontend dependencies
         run: cd client && npm ci
 
-      - name: Run frontend tests
-        run: cd client && npm test
+      - name: Run frontend tests (with coverage)
+        run: cd client && npm run test:coverage
         env:
           CI: true
 
@@ -149,6 +152,20 @@ jobs:
             .
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      # SonarCloud — runs entirely on this GitHub-hosted runner, reports to
+      # sonarcloud.io over HTTPS. No self-hosted Sonar server, no EC2.
+      # Consumes the lcov coverage output from the test:coverage steps above.
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f  # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.javascript.lcov.reportPaths=client/coverage/lcov.info,services/catalog-service/coverage/lcov.info,services/user-service/coverage/lcov.info,services/order-service/coverage/lcov.info,services/notification-service/coverage/lcov.info,services/api-gateway/coverage/lcov.info
+            -Dsonar.exclusions=**/__tests__/**,**/node_modules/**,client/build/**
 
   # ─────────────────────────────────────────────────────────────────────────
   # STAGE 2 · Lint & Manifest Validation

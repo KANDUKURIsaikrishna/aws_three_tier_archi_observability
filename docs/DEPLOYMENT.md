@@ -79,7 +79,41 @@ This used to need a second apply — Terraform couldn't create the public Route5
 
 RDS (~10-15 min) and EKS (~15-20 min) are the slow parts and provision concurrently since neither depends on the other directly (both depend on `network`/`security`, not on each other). The `eks-addons` Helm releases run after the cluster is up, now fully concurrently with each other too (see [`ARCHITECTURE.md`](ARCHITECTURE.md#terraform-module-graph)) — if any single Helm release times out, see TROUBLESHOOTING TF-001/TF-006/OBS-006 before assuming something is broken. As long as Step 3's NS records were set and have propagated, `aws_acm_certificate_validation.ingress` resolves on its own within a few minutes — no manual registrar step here anymore (that used to be required after *every* destroy+recreate cycle, since the public zone was Terraform-managed and got brand-new NS values each time it was recreated; it's now a `data` lookup instead, see Step 3 and OBS-058).
 
-## Step 5 — Import known-conflicting Secrets Manager entries (if re-deploying)
+## Step 5 — Configure GitHub Secrets & Variables for CI/CD
+
+Nothing in `.github/workflows/` works until these exist — every push fails predictably at the AWS-auth step otherwise, on a genuinely fresh repo. This is a real chicken-and-egg step, not skippable in a different order: `AWS_ROLE_ARN` names the `aws_iam_role.github_oidc` role Terraform just created in Step 4, using *your own* local AWS CLI credentials — CI has no way to bootstrap that role itself, since it needs the role to authenticate in the first place. From here on, every CI-driven apply uses OIDC — no static AWS keys ever touch GitHub.
+
+One-time per AWS account, outside Terraform (`iam.tf`'s trust policy references this provider by ARN, but doesn't create it — do this before or during Step 4, just make sure it exists before the first CI run actually tries to assume the role):
+
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+```
+
+Then, in GitHub: **Settings → Secrets and variables → Actions**.
+
+**Secrets** tab:
+
+| Secret | Value |
+|---|---|
+| `AWS_ACCOUNT_ID` | `aws sts get-caller-identity --query Account --output text` |
+| `AWS_ROLE_ARN` | `terraform output -raw github_oidc_role_arn` — only exists after Step 4's apply |
+| `API_URL` | `https://api.bookstore.<your-domain>` |
+| `SONAR_TOKEN` | sonarcloud.io → My Account → Security |
+| `SONAR_ORGANIZATION` | your SonarCloud org key |
+| `SONAR_PROJECT_KEY` | your SonarCloud project key |
+
+**Variables** tab (not sensitive — skip entirely if deploying to `us-west-1`):
+
+| Variable | Value |
+|---|---|
+| `AWS_REGION` | must match `config.env`'s `AWS_REGION` from Step 1, or CI defaults to `us-west-1` regardless of where Terraform actually provisioned |
+
+Until all the Secrets above exist, expect exactly two failures on every push, both normal for a fresh repo: `Terraform CI/CD` fails at "Configure AWS credentials (OIDC)" (no `AWS_ROLE_ARN` yet), and `DevSecOps Pipeline` fails at the SonarCloud step (no `SONAR_TOKEN` yet). Neither is a region problem or a code problem — just missing secrets.
+
+## Step 6 — Import known-conflicting Secrets Manager entries (if re-deploying)
 
 Only needed if this isn't a truly fresh account — repeated destroy/apply cycles can leave Secrets Manager entries Terraform's state doesn't know about:
 
@@ -89,7 +123,7 @@ make import
 
 Safe no-op on a genuinely fresh account (`|| echo already imported` on both).
 
-## Step 6 — Confirm the ExternalSecrets IRSA fix actually took
+## Step 7 — Confirm the ExternalSecrets IRSA fix actually took
 
 This bit silently broke every secret sync in the cluster until fixed on this branch (see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)) — don't skip verifying it:
 
@@ -108,7 +142,7 @@ kubectl get externalsecret admin-db-secret -n catalog
 # this one's just picked as the first to check
 ```
 
-## Step 7 — Watch all apps come up
+## Step 8 — Watch all apps come up
 
 Both `k8s/argocd/application.yaml` (the `bookstore` Application — the React frontend and its shared namespace resources: storage class, secrets bootstrap, network policy, PDB, quota) and `k8s/argocd/applicationset-microservices.yaml` (all 5 backend microservices: catalog, user, order, notification, api-gateway, one ArgoCD `Application` each) were already applied by Terraform in Step 4 — nothing to `kubectl apply` here. There is no backend monolith anymore; the original single frontend/backend pair was fully replaced by these 5 microservices, and `application.yaml` deploys frontend only. Just watch ArgoCD reconcile, within 3 minutes of the apply finishing:
 

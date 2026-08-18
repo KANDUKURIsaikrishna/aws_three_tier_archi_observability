@@ -7,6 +7,14 @@ How to actually stand this project up, end to end, from a fresh AWS account. Thi
 - AWS credentials configured (`aws sts get-caller-identity` should work) with sufficient permissions to create VPCs, EKS clusters, RDS instances, IAM roles, etc.
 - `terraform` >= 1.10.0 (native S3 state locking needs it), `kubectl`, `aws` CLI — all three need to be on `PATH` on whatever machine runs `terraform apply`, not just for your own convenience: `null_resource` provisioners in this Terraform config now shell out to `kubectl`/`aws` directly (ALB hostname discovery, the destroy-time Ingress/log-group cleanup). `helm` itself isn't needed on your machine — the `helm` Terraform provider talks to the Helm API directly, no CLI required.
 - A domain you control (for `terraform.tfvars`' `domain` value — ACM DNS validation needs it)
+- The GitHub OIDC identity provider created in your AWS account, one-time, ever (not a Terraform resource — `iam.tf`'s trust policy just references its ARN by string, so Terraform never checks it exists):
+  ```bash
+  aws iam create-open-id-connect-provider \
+    --url https://token.actions.githubusercontent.com \
+    --client-id-list sts.amazonaws.com \
+    --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+  ```
+  Safe to skip if it already exists — `aws iam list-open-id-connect-providers` to check first, the create call fails loudly (`EntityAlreadyExists`) if you skip that check and run it twice.
 - **Expect this to take roughly 20-30 minutes** and to cost real money the moment RDS/EKS/the monitoring EC2 exist. Don't run `terraform apply` on the full stack "just to see what happens." (This branch removed some unnecessary serialization in the Terraform graph — RDS/EKS already ran concurrently, but `eks-addons`'s 5 Helm charts now all install concurrently instead of partly one-after-another, and `monitoring-ec2` no longer waits on all of `eks-addons` to finish. See [`ARCHITECTURE.md`](ARCHITECTURE.md#terraform-module-graph). This hasn't been verified against a real apply yet — if Helm installs start timing out (TF-001-shaped failures), see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for the rollback.)
 
 ## Step 1 — Fill in your config, generate `terraform.tfvars`
@@ -81,18 +89,9 @@ RDS (~10-15 min) and EKS (~15-20 min) are the slow parts and provision concurren
 
 ## Step 5 — Configure GitHub Secrets & Variables for CI/CD
 
-Nothing in `.github/workflows/` works until these exist — every push fails predictably at the AWS-auth step otherwise, on a genuinely fresh repo. This is a real chicken-and-egg step, not skippable in a different order: `AWS_ROLE_ARN` names the `aws_iam_role.github_oidc` role Terraform just created in Step 4, using *your own* local AWS CLI credentials — CI has no way to bootstrap that role itself, since it needs the role to authenticate in the first place. From here on, every CI-driven apply uses OIDC — no static AWS keys ever touch GitHub.
+Nothing in `.github/workflows/` works until these exist — every push fails predictably at the AWS-auth step otherwise, on a genuinely fresh repo. `AWS_ROLE_ARN` names the `aws_iam_role.github_oidc` role Step 4's apply just created (using *your own* local AWS CLI credentials — CI has no way to bootstrap that role itself, since it needs the role to authenticate in the first place). The OIDC identity provider that role's trust policy points at is already in place too, from **Before you start**. From here on, every CI-driven apply uses OIDC — no static AWS keys ever touch GitHub.
 
-One-time per AWS account, outside Terraform (`iam.tf`'s trust policy references this provider by ARN, but doesn't create it — do this before or during Step 4, just make sure it exists before the first CI run actually tries to assume the role):
-
-```bash
-aws iam create-open-id-connect-provider \
-  --url https://token.actions.githubusercontent.com \
-  --client-id-list sts.amazonaws.com \
-  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
-```
-
-Then, in GitHub: **Settings → Secrets and variables → Actions**.
+In GitHub: **Settings → Secrets and variables → Actions**.
 
 **Secrets** tab:
 

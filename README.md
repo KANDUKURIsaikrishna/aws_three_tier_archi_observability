@@ -82,7 +82,7 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 | GitOps | ArgoCD |
 | Secret Management | AWS Secrets Manager + External Secrets Operator |
 | Observability | Prometheus + Grafana + Loki + Alertmanager on a dedicated EC2 (Docker Compose) |
-| Security Scanning | Trivy (containers), Gitleaks (secrets), Semgrep (SAST), tfsec (IaC), SonarCloud (code quality + coverage gate) |
+| Security Scanning | Trivy (containers), Gitleaks (secrets), tfsec (IaC), SonarCloud (code quality + coverage gate) |
 | TLS | cert-manager + Let's Encrypt / ACM |
 | Testing | Vitest per service, `vi.fn()` mock db |
 | DR | Cross-region (us-west-2) ECR replication + RDS backup replication + Route53 failover |
@@ -216,7 +216,7 @@ npm run build      # production build → build/
 
 The platform is provisioned by 8 Terraform modules plus root-level cross-cutting resources (IAM/OIDC, CloudTrail, GuardDuty, CloudFront, DR), and deployed via ArgoCD GitOps across the frontend and five microservice namespaces. Full step-by-step instructions — Terraform state bootstrap, `config.env`/`scripts/configure.py`, the apply itself, and post-apply verification — live in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Module-by-module and traffic-flow detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secret scan (Gitleaks) → SAST/tests/validate (Semgrep, npm audit, Vitest, ESLint, kubeconform) → build-and-push (Docker build → Trivy scan → ECR push) → deploy on `main` (manual approval gate, `kustomize edit set image` → commit → ArgoCD sync).
+The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secret scan (Gitleaks) → test/audit/validate (Vitest + coverage, npm audit, SonarCloud, kubeconform) → build-and-push (Docker build → Trivy scan → ECR push) → deploy on `main` (manual approval gate, `kustomize edit set image` → commit → ArgoCD sync).
 
 ---
 
@@ -238,7 +238,7 @@ The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secr
 | Control | Implementation |
 |---|---|
 | Secret detection | Gitleaks scans every commit and full git history |
-| SAST | Semgrep with Node.js + OWASP Top-10 rule packs |
+| Code quality / SAST | SonarCloud Quality Gate (bugs, code smells, security hotspots, coverage) |
 | Unit tests | Vitest per service — runs before audit in CI |
 | Dependency CVEs | `npm audit --omit=dev --audit-level=high` per service and frontend |
 | Container CVEs | Trivy blocks pushes on CRITICAL/HIGH unfixed vulns |
@@ -264,7 +264,6 @@ Configure these in **Settings → Secrets and variables → Actions** before run
 | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | `123456789012` |
 | `AWS_ROLE_ARN` | ARN of the OIDC IAM role the pipeline assumes | `arn:aws:iam::123456789012:role/bookstore-github-oidc-role` |
 | `API_URL` | Public URL of the api-gateway (injected into the React build) | `https://api.bookstore.b17facebook.xyz` |
-| `SEMGREP_APP_TOKEN` | Semgrep Cloud token (optional — remove the env line if not using Semgrep Cloud) | `token...` |
 | `SONAR_TOKEN` | SonarCloud auth token — sonarcloud.io → My Account → Security | `token...` |
 | `SONAR_ORGANIZATION` | SonarCloud organization key | `kandukurisaikrishna` |
 | `SONAR_PROJECT_KEY` | SonarCloud project key | `KANDUKURIsaikrishna_aws_three_tier_archi_observability` |

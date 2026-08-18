@@ -22,9 +22,14 @@ concurrency:
 #   SONAR_TOKEN          — SonarCloud auth token (sonarcloud.io → My Account → Security)
 #   SONAR_ORGANIZATION   — SonarCloud org key
 #   SONAR_PROJECT_KEY    — SonarCloud project key
+#
+# Optional repo Variable (Settings → Secrets and variables → Actions →
+# Variables, not Secrets — not sensitive): AWS_REGION. Defaults to us-west-1
+# if unset. Must match terraform.tfvars' aws_region / config.env's
+# AWS_REGION or CI builds/pushes images to the wrong region's ECR.
 
 env:
-  AWS_REGION:    us-west-1
+  AWS_REGION:    ${{ vars.AWS_REGION || 'us-west-1' }}
   FRONTEND_REPO: bookstore-frontend
   CATALOG_REPO:  bookstore-catalog-service
   USER_REPO:     bookstore-user-service

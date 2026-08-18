@@ -28,7 +28,9 @@ import secrets as secrets_mod
 # ── Config ────────────────────────────────────────────────────────────────────
 
 CLUSTER_NAME  = "bookstore-eks"
-REGION        = "us-west-1"
+# Must match terraform.tfvars' aws_region / config.env's AWS_REGION -- set
+# REGION env var if you deployed anywhere other than us-west-1.
+REGION        = os.environ.get("REGION", "us-west-1")
 APP_NAMESPACE = "bookstore"
 # Set DOMAIN env var before running: DOMAIN=your-domain.com python eks_bootstrap.py
 DOMAIN = os.environ.get("DOMAIN", "")

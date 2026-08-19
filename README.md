@@ -93,9 +93,21 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 
 ```
 .
-├── main.tf                    # Root Terraform config — module call order + Helm provider
-├── argocd.tf / cloudfront.tf / cloudtrail.tf / dr.tf / guardduty.tf
-├── iam.tf / observability-rbac.tf / outputs.tf / providers.tf / variables.tf / versions.tf
+├── terraform/                  # All infrastructure as code
+│   ├── main.tf                  # Root config — module call order + Helm provider
+│   ├── argocd.tf / cloudfront.tf / cloudtrail.tf / dr.tf / guardduty.tf
+│   ├── iam.tf / observability-rbac.tf / outputs.tf / providers.tf / variables.tf / versions.tf
+│   ├── modules/                  # Reusable modules
+│   │   ├── ecr/                    # ECR repositories per service
+│   │   ├── eks/                     # EKS cluster + OIDC + node group
+│   │   ├── eks-addons/               # Helm: ALB controller, ESO, ArgoCD, Argo Rollouts, VPC CNI, EBS CSI
+│   │   ├── monitoring-ec2/            # Standalone Prometheus/Grafana/Loki/Alertmanager EC2
+│   │   ├── network/                 # VPC, subnets, NAT gateway
+│   │   ├── rds/                     # RDS MySQL (Multi-AZ)
+│   │   ├── route53/                 # Public + private hosted zones
+│   │   └── security/                # Security groups
+│   └── environments/             # Per-environment tfvars templates (dev, staging)
+│
 ├── eks_bootstrap.py           # Post-apply cluster bootstrap script
 │
 ├── client/                    # React frontend
@@ -121,17 +133,6 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 │   ├── overlays/dev/ , overlays/prod/
 │   └── argocd/                  # ArgoCD Application manifests
 │
-├── modules/                    # Terraform reusable modules
-│   ├── ecr/                     # ECR repositories per service
-│   ├── eks/                     # EKS cluster + OIDC + node group
-│   ├── eks-addons/               # Helm: ALB controller, ESO, ArgoCD, Argo Rollouts, VPC CNI, EBS CSI
-│   ├── monitoring-ec2/            # Standalone Prometheus/Grafana/Loki/Alertmanager EC2
-│   ├── network/                 # VPC, subnets, NAT gateway
-│   ├── rds/                     # RDS MySQL (Multi-AZ)
-│   ├── route53/                 # Public + private hosted zones
-│   └── security/                # Security groups
-│
-├── environments/                # Per-environment tfvars templates (dev, staging)
 ├── scripts/                     # build-and-push, init-backend, init-domain, configure.py, simulate-load
 ├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md
 └── .github/workflows/           # ci-cd.yml, terraform.yml, terraform-drift.yml

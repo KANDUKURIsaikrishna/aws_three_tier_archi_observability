@@ -1,9 +1,11 @@
 .PHONY: init import plan apply destroy monitoring-status monitoring-logs monitoring-key
 
+TF_DIR = terraform
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 init:
-	terraform init
+	terraform -chdir=$(TF_DIR) init
 
 # Import pre-existing secrets that Terraform can't create (state lost due to S3 backend).
 # Run once per fresh state. || true prevents failure if already imported.
@@ -20,29 +22,29 @@ init:
 # AWS CLI and let Terraform recreate an identical one -- nothing about an EKS
 # cluster role's identity is worth preserving via import.
 import:
-	terraform import \
+	terraform -chdir=$(TF_DIR) import \
 	  module.rds.aws_secretsmanager_secret.db_credentials \
 	  /bookstore/db-credentials 2>/dev/null || echo "db-credentials already in state"
-	terraform import \
+	terraform -chdir=$(TF_DIR) import \
 	  module.eks_addons.aws_secretsmanager_secret.grafana_admin \
 	  /bookstore/grafana-admin 2>/dev/null || echo "grafana-admin already in state"
-	terraform import \
+	terraform -chdir=$(TF_DIR) import \
 	  aws_secretsmanager_secret.jwt_secret \
 	  /bookstore/jwt-secret 2>/dev/null || echo "jwt-secret already in state"
 
 plan: init
-	terraform plan
+	terraform -chdir=$(TF_DIR) plan
 
 # Full automated deploy: init → import known conflicts → apply
 apply: init import
-	terraform apply -auto-approve
+	terraform -chdir=$(TF_DIR) apply -auto-approve
 
 destroy:
-	terraform destroy -auto-approve
+	terraform -chdir=$(TF_DIR) destroy -auto-approve
 
 # ── Monitoring helpers ────────────────────────────────────────────────────────
 
-MONITORING_IP = $(shell terraform output -raw grafana_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
+MONITORING_IP = $(shell terraform -chdir=$(TF_DIR) output -raw grafana_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
 MONITORING_KEY = .monitoring-ssh-key.pem
 
 # Fetch the auto-generated SSH private key from Terraform state and save it
@@ -50,7 +52,7 @@ MONITORING_KEY = .monitoring-ssh-key.pem
 # idempotent, just re-reads the same state-stored key, doesn't regenerate it.
 monitoring-key:
 	@rm -f $(MONITORING_KEY)
-	terraform output -raw monitoring_ssh_private_key > $(MONITORING_KEY)
+	terraform -chdir=$(TF_DIR) output -raw monitoring_ssh_private_key > $(MONITORING_KEY)
 	chmod 400 $(MONITORING_KEY)
 
 # Tail the cloud-init log on the monitoring EC2

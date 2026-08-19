@@ -81,8 +81,8 @@ def main():
     print(f"  Alerts  : {alert_email}")
     print()
 
-    # ── 1. terraform.tfvars ──────────────────────────────────────────────────
-    tfvars = REPO_ROOT / "terraform.tfvars"
+    # ── 1. terraform/terraform.tfvars ────────────────────────────────────────
+    tfvars = REPO_ROOT / "terraform" / "terraform.tfvars"
     tfvars.write_text(
         f'aws_region  = "{region}"\n'
         f'domain      = "{domain}"\n'
@@ -90,7 +90,7 @@ def main():
         f'alert_email = "{alert_email}"\n',
         encoding="utf-8",
     )
-    print(f"  [ok]  terraform.tfvars  (generated)")
+    print(f"  [ok]  terraform/terraform.tfvars  (generated)")
 
     # ── 2. k8s/base/ingress/ingress.yaml ─────────────────────────────────────
     substitute("k8s/base/ingress/ingress.yaml", {

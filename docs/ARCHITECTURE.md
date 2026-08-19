@@ -43,7 +43,7 @@ Everything above lives in one EKS cluster (`bookstore-eks`, us-west-1), split ac
 ## Region layout
 
 **Primary: us-west-1** — all live workloads (EKS, RDS, monitoring EC2, all traffic).
-**Secondary: us-west-2** — DR only. ECR image replication + RDS automated-backup replication (needs an explicit KMS key, off by default) + a Route53 failover record. **No EKS cluster in us-west-2.** If us-west-1 goes down, there's no compute to fail over to yet — DR today is backup-level, not active-active. See [`dr.tf`](../dr.tf).
+**Secondary: us-west-2** — DR only. ECR image replication + RDS automated-backup replication (needs an explicit KMS key, off by default) + a Route53 failover record. **No EKS cluster in us-west-2.** If us-west-1 goes down, there's no compute to fail over to yet — DR today is backup-level, not active-active. See [`dr.tf`](../terraform/dr.tf).
 
 ## Terraform module graph
 

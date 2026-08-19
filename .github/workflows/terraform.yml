@@ -4,12 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "**.tf"
+      - "terraform/**"
       - ".github/workflows/terraform.yml"
   pull_request:
     branches: [main]
     paths:
-      - "**.tf"
+      - "terraform/**"
 
 permissions:
   id-token: write
@@ -24,6 +24,9 @@ jobs:
   terraform:
     name: Terraform Plan & Apply
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -42,7 +45,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: config
-          scan-ref: .
+          scan-ref: terraform
           exit-code: "1"
           severity: CRITICAL,HIGH
           skip-dirs: ".terraform"
@@ -67,7 +70,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync('plan_output.txt', 'utf8').slice(0, 60000);
+            const plan = fs.readFileSync('terraform/plan_output.txt', 'utf8').slice(0, 60000);
             const outcome = '${{ steps.plan.outcome }}';
             const body = `#### Terraform Plan \`${outcome}\`\n\`\`\`hcl\n${plan}\n\`\`\``;
             github.rest.issues.createComment({

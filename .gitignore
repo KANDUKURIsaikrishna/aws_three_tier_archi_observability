@@ -16,8 +16,8 @@ terraform.tfvars
 terraform.tfvars.json
 
 # Per-environment overrides — real values, keep the .example templates in git
-environments/*.tfvars
-!environments/*.tfvars.example
+terraform/environments/*.tfvars
+!terraform/environments/*.tfvars.example
 
 # Node
 node_modules/

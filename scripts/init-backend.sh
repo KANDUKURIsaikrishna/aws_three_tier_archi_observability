@@ -34,7 +34,7 @@ fi
 REGION="${1:-${CONFIG_ENV_REGION:-us-west-1}}"
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="bookstore-terraform-state-${ACCOUNT_ID}"
-VERSIONS_TF="${REPO_ROOT}/versions.tf"
+VERSIONS_TF="${REPO_ROOT}/terraform/versions.tf"
 
 echo ""
 echo "Account : ${ACCOUNT_ID}"
@@ -107,7 +107,7 @@ grep -A 8 'backend "s3"' "${VERSIONS_TF}"
 # ── 3. terraform init ──────────────────────────────────────────────────────────
 echo ""
 echo "[init] Running terraform init..."
-cd "${REPO_ROOT}"
+cd "${REPO_ROOT}/terraform"
 
 if [[ -d ".terraform" ]]; then
   terraform init -reconfigure
@@ -117,7 +117,7 @@ fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Backend ready. Run:"
-echo "  terraform plan"
-echo "  terraform apply"
+echo "Backend ready. Run (from the terraform/ directory, or 'make plan'/'make apply' from repo root):"
+echo "  cd terraform && terraform plan"
+echo "  cd terraform && terraform apply"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

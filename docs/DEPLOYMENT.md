@@ -2,6 +2,8 @@
 
 How to actually stand this project up, end to end, from a fresh AWS account. This is the "nothing exists yet" path — the one this project is actually in right now on `observability` (verified 2026-07-31: `aws eks describe-cluster --name bookstore-eks` returns `ResourceNotFoundException` — nothing is running, despite a stale local `kubectl` context suggesting otherwise. Always verify against AWS directly, never trust a cached kubeconfig).
 
+All Terraform (`*.tf`, `modules/`, `environments/`) lives under `terraform/`, not repo root — every raw `terraform` command below runs from inside that directory (`cd terraform` first). `make plan`/`make apply`/`make destroy` from repo root handle this automatically (`Makefile` uses `terraform -chdir=terraform`), if you'd rather not `cd` by hand.
+
 ## Before you start
 
 - AWS credentials configured (`aws sts get-caller-identity` should work) with sufficient permissions to create VPCs, EKS clusters, RDS instances, IAM roles, etc.
@@ -69,6 +71,7 @@ Creates the public Route53 hosted zone for `DOMAIN` (from `config.env`) if it do
 ## Step 4 — One apply, everything
 
 ```bash
+cd terraform
 terraform plan -out=tfplan
 # review it — expect ~140 resources on a genuinely fresh account:
 #   VPC + subnets + NAT + IGW + S3 endpoint, security groups, 2 ACM certs
@@ -238,6 +241,7 @@ You almost never run `kubectl apply` for app changes after this point — push t
 ## Monitoring access
 
 ```bash
+cd terraform
 terraform output grafana_url        # Grafana, default user "admin"
 terraform output prometheus_url     # Prometheus, also user "admin" -- see OBS-063
 terraform output alertmanager_url   # Alertmanager, also user "admin" -- see OBS-063
@@ -250,6 +254,7 @@ aws secretsmanager get-secret-value --secret-id /bookstore/monitoring-basic-auth
 ## Tearing it down
 
 ```bash
+cd terraform
 terraform destroy
 ```
 

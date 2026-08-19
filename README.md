@@ -108,8 +108,6 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 │   │   └── security/                # Security groups
 │   └── environments/             # Per-environment tfvars templates (dev, staging)
 │
-├── eks_bootstrap.py           # Post-apply cluster bootstrap script
-│
 ├── client/                    # React frontend
 │   ├── Dockerfile              # Multi-stage: build → Nginx
 │   └── src/

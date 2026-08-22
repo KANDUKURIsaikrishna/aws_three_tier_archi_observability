@@ -76,31 +76,38 @@ def main():
     if missing:
         sys.exit(f"\nERROR: Missing values in config.env: {', '.join(missing)}\n")
 
-    account_id    = cfg["AWS_ACCOUNT_ID"]
-    region        = cfg["AWS_REGION"]
-    domain        = cfg["DOMAIN"]
-    github_repo   = cfg["GITHUB_REPO"]
-    alert_email   = cfg["ALERT_EMAIL"]
-    github_branch = cfg.get("GITHUB_BRANCH") or "main"
+    account_id       = cfg["AWS_ACCOUNT_ID"]
+    region           = cfg["AWS_REGION"]
+    domain           = cfg["DOMAIN"]
+    github_repo      = cfg["GITHUB_REPO"]
+    alert_email      = cfg["ALERT_EMAIL"]
+    github_branch    = cfg.get("GITHUB_BRANCH") or "main"
+    secondary_region = cfg.get("SECONDARY_REGION") or "us-west-2"
 
     print(f"\nConfiguring project with:")
-    print(f"  Account : {account_id}")
-    print(f"  Region  : {region}")
-    print(f"  Domain  : {domain}")
-    print(f"  Repo    : {github_repo}")
-    print(f"  Branch  : {github_branch}")
-    print(f"  Alerts  : {alert_email}")
+    print(f"  Account    : {account_id}")
+    print(f"  Region     : {region}")
+    print(f"  DR Region  : {secondary_region}")
+    print(f"  Domain     : {domain}")
+    print(f"  Repo       : {github_repo}")
+    print(f"  Branch     : {github_branch}")
+    print(f"  Alerts     : {alert_email}")
     print()
 
     # ── 1. terraform/terraform.tfvars ────────────────────────────────────────
     # Fully regenerated every run -- no idempotency ambiguity possible here,
     # which is exactly the property the substitutions below now match too.
+    # secondary_region only matters if enable_dr_replication=true elsewhere
+    # (off by default) -- written unconditionally anyway since it matches
+    # variables.tf's own "us-west-2" default when SECONDARY_REGION is unset,
+    # so this is a no-op for anyone not using DR.
     tfvars = REPO_ROOT / "terraform" / "terraform.tfvars"
     tfvars.write_text(
-        f'aws_region  = "{region}"\n'
-        f'domain      = "{domain}"\n'
-        f'github_repo = "{github_repo}"\n'
-        f'alert_email = "{alert_email}"\n',
+        f'aws_region       = "{region}"\n'
+        f'secondary_region = "{secondary_region}"\n'
+        f'domain           = "{domain}"\n'
+        f'github_repo      = "{github_repo}"\n'
+        f'alert_email      = "{alert_email}"\n',
         encoding="utf-8",
     )
     print(f"  [ok]  terraform/terraform.tfvars  (generated)")

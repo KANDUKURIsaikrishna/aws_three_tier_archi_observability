@@ -24,7 +24,8 @@ All Terraform (`*.tf`, `modules/`, `environments/`) lives under `terraform/`, no
 ```bash
 cp config.env.example config.env
 # edit config.env: AWS_ACCOUNT_ID, AWS_REGION, DOMAIN, GITHUB_REPO, ALERT_EMAIL
-# (GITHUB_BRANCH is optional -- defaults to "main" if left unset)
+# (GITHUB_BRANCH and SECONDARY_REGION are optional -- default to "main"
+# and "us-west-2" respectively if left unset)
 python3 scripts/configure.py
 ```
 

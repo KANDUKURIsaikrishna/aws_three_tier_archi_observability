@@ -47,7 +47,7 @@ variable "github_repo" {
 }
 
 variable "secondary_region" {
-  description = "Secondary AWS region for DR failover, IF enable_dr_replication is true (see that variable — this region alone does not turn replication on). Always needs a valid region string regardless, since the \"secondary\" provider alias in providers.tf is configured with it unconditionally. Default: us-west-2 (Oregon). CloudFront ACM always uses us-east-1 regardless of this value."
+  description = "Secondary AWS region for DR failover, IF enable_dr_replication is true (see that variable — this region alone does not turn replication on). Always needs a valid region string regardless, since the \"secondary\" provider alias in providers.tf is configured with it unconditionally. Default: us-west-2 (Oregon). Stamped from config.env's SECONDARY_REGION by scripts/configure.py (optional — omitting it there keeps this default). CloudFront ACM always uses us-east-1 regardless of this value."
   type        = string
   default     = "us-west-2"
 

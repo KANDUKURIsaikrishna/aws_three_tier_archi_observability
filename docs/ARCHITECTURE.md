@@ -189,4 +189,5 @@ The old backend's Argo Rollout (canary 10%→25%→50%→100%) is gone — delet
 ## Related docs
 
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — how to actually stand this up
+- [`UML.md`](UML.md) — application-layer UML: component/class/ER/sequence diagrams
 - [`../README.md`](../README.md) — tech stack, repo structure, local development, CI/CD overview

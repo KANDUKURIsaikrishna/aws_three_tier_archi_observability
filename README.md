@@ -8,6 +8,7 @@ A production-grade, cloud-native bookstore application on AWS, built as a refere
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | System-level view: current state, module graph, region layout, the microservices platform |
 | [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | How to stand this up from zero, step by step |
+| [`docs/UML.md`](docs/UML.md) | Application-layer UML: component/class/ER diagrams, auth + checkout sequence diagrams |
 
 ---
 
@@ -135,7 +136,7 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 │                                 #   monitoring_credentials, and the local-exec helpers Terraform invokes
 │                                 #   (derive_ses_smtp_password, wait_for_alb_hostname, cleanup_eks_networking,
 │                                 #   force_delete_flow_log_group, delete_ingress_objects)
-├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md
+├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md, UML.md
 └── .github/workflows/           # ci-cd.yml, terraform.yml, terraform-drift.yml
 ```
 

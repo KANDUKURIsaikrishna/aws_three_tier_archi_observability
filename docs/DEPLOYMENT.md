@@ -271,4 +271,5 @@ Since `argocd.tf`'s `kubectl_manifest` resources are now what created the ArgoCD
 ## Related
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — system-level view: module graph, region layout, secrets flow, GitOps deployment flow
+- [`UML.md`](UML.md) — application-layer UML: component/class/ER/sequence diagrams
 - [`README.md`](../README.md) — tech stack, repo structure, local development, CI/CD overview

@@ -7,7 +7,7 @@ All Terraform (`*.tf`, `modules/`, `environments/`) lives under `terraform/`, no
 ## Before you start
 
 - AWS credentials configured (`aws sts get-caller-identity` should work) with sufficient permissions to create VPCs, EKS clusters, RDS instances, IAM roles, etc.
-- `terraform` >= 1.10.0 (native S3 state locking needs it), `kubectl`, `aws` CLI — all three need to be on `PATH` on whatever machine runs `terraform apply`, not just for your own convenience: `null_resource` provisioners in this Terraform config now shell out to `kubectl`/`aws` directly (ALB hostname discovery, the destroy-time Ingress/log-group cleanup). `helm` itself isn't needed on your machine — the `helm` Terraform provider talks to the Helm API directly, no CLI required.
+- `terraform` >= 1.10.0 (native S3 state locking needs it), `kubectl`, `aws` CLI, and `python3` — all four need to be on `PATH` on whatever machine runs `terraform apply`, not just for your own convenience: every `local-exec` provisioner in this Terraform config invokes `python3` directly (`interpreter = ["python3"]`, not a shell) to run a real script from `scripts/` — ALB hostname discovery, the SES SMTP password derivation, and the destroy-time Ingress/flow-log-group cleanup — so it behaves identically on Windows, macOS, and Linux instead of assuming a bash-compatible shell exists. `helm` itself isn't needed on your machine — the `helm` Terraform provider talks to the Helm API directly, no CLI required.
 - A domain you control (for `terraform.tfvars`' `domain` value — ACM DNS validation needs it)
 - The GitHub OIDC identity provider created in your AWS account, one-time, ever (not a Terraform resource — `iam.tf`'s trust policy just references its ARN by string, so Terraform never checks it exists):
   ```bash

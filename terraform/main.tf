@@ -219,7 +219,13 @@ resource "null_resource" "ses_smtp_password" {
     access_key_id = aws_iam_access_key.ses_smtp.id
   }
 
+  # interpreter = ["python3"] makes Terraform invoke python3 DIRECTLY, no
+  # cmd.exe (Windows) or /bin/sh (POSIX) in between -- sidesteps shell-
+  # quoting entirely rather than working around it. A bash heredoc here
+  # previously failed outright on Windows, where local-exec always shells
+  # out via cmd.exe regardless of which shell invoked terraform itself.
   provisioner "local-exec" {
+    interpreter = ["python3"]
     environment = {
       SECRET_KEY = aws_iam_access_key.ses_smtp.secret
       ACCESS_KEY = aws_iam_access_key.ses_smtp.id
@@ -228,40 +234,7 @@ resource "null_resource" "ses_smtp_password" {
       FROM_EMAIL = var.alert_email
       TO_EMAIL   = var.alert_email
     }
-    command = <<-EOT
-      python3 <<'PYEOF'
-import hmac, hashlib, base64, json, os, subprocess
-
-def sign(key, msg):
-    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
-
-def derive_smtp_password(secret_key, region):
-    date = "11111111"
-    k = sign(("AWS4" + secret_key).encode("utf-8"), date)
-    k = sign(k, region)
-    k = sign(k, "ses")
-    k = sign(k, "aws4_request")
-    k = sign(k, "SendRawEmail")
-    return base64.b64encode(bytes([0x04]) + k).decode("utf-8")
-
-region = os.environ["REGION"]
-secret = {
-    "SMTP_HOST": f"email-smtp.{region}.amazonaws.com",
-    "SMTP_PORT": "587",
-    "SMTP_USERNAME": os.environ["ACCESS_KEY"],
-    "SMTP_PASSWORD": derive_smtp_password(os.environ["SECRET_KEY"], region),
-    "SMTP_FROM": os.environ["FROM_EMAIL"],
-    "SMTP_TO": os.environ["TO_EMAIL"],
-}
-subprocess.run(
-    ["aws", "secretsmanager", "put-secret-value",
-     "--secret-id", os.environ["SECRET_ID"],
-     "--region", region,
-     "--secret-string", json.dumps(secret)],
-    check=True,
-)
-PYEOF
-    EOT
+    command = "${path.module}/../scripts/derive_ses_smtp_password.py"
   }
 
   depends_on = [aws_secretsmanager_secret.alertmanager_smtp]

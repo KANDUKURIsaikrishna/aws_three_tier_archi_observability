@@ -41,6 +41,19 @@ provider "aws" {
 }
 
 provider "helm" {
+  # Isolates this project's Helm repo state from whatever else is registered
+  # in the operator's global Helm config (%APPDATA%\helm\repositories.yaml
+  # on Windows, ~/.config/helm/repositories.yaml elsewhere). Without this,
+  # the provider refreshes the index for EVERY repo in that global config on
+  # every apply, not just the repos this project actually declares -- one
+  # stale/unreachable entry left over from an unrelated project (e.g. a
+  # removed cert-manager install's jetstack repo) cascade-fails every
+  # helm_release resource here, not just whichever one happens to share
+  # that repo. .terraform/ is already gitignored, so this doesn't add
+  # anything to version control.
+  repository_config_path = "${path.module}/.terraform/helm/repositories.yaml"
+  repository_cache       = "${path.module}/.terraform/helm/cache"
+
   kubernetes {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_ca_certificate)

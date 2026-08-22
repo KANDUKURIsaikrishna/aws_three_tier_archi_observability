@@ -23,19 +23,21 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "kubectl_manifest" "argocd_appproject" {
-  yaml_body = file("${path.module}/k8s/argocd/appproject.yaml")
+  # path.module resolves to terraform/ (this file's own directory) -- k8s/
+  # lives one level up, at the repo root, hence ../.
+  yaml_body = file("${path.module}/../k8s/argocd/appproject.yaml")
 
   depends_on = [module.eks_addons]
 }
 
 resource "kubectl_manifest" "argocd_application" {
-  yaml_body = file("${path.module}/k8s/argocd/application.yaml")
+  yaml_body = file("${path.module}/../k8s/argocd/application.yaml")
 
   depends_on = [module.eks_addons, kubectl_manifest.argocd_appproject]
 }
 
 resource "kubectl_manifest" "argocd_applicationset_microservices" {
-  yaml_body = file("${path.module}/k8s/argocd/applicationset-microservices.yaml")
+  yaml_body = file("${path.module}/../k8s/argocd/applicationset-microservices.yaml")
 
   depends_on = [module.eks_addons, kubectl_manifest.argocd_appproject]
 }
@@ -76,24 +78,18 @@ resource "null_resource" "wait_for_alb_hostname" {
 
   depends_on = [module.eks_addons, kubectl_manifest.argocd_application]
 
+  # interpreter = ["python3"] makes Terraform invoke python3 DIRECTLY, no
+  # cmd.exe (Windows) or /bin/sh (POSIX) in between -- the bash for-loop and
+  # $(...) subshell this used to be previously failed outright on Windows,
+  # where local-exec always shells out via cmd.exe regardless of which
+  # shell invoked terraform itself.
   provisioner "local-exec" {
-    command = <<-EOT
-      aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region} >/dev/null
-
-      # Stage 1: wait for ArgoCD to have actually synced the Ingress object
-      # into existence -- up to 5 minutes, generous since automated sync on
-      # a brand-new Application typically starts within seconds, not a full
-      # 3-minute poll cycle, but this is a safety margin, not the expected path.
-      for i in $(seq 1 60); do
-        kubectl get ingress bookstore-ingress -n bookstore >/dev/null 2>&1 && break
-        sleep 5
-      done
-
-      # Stage 2: wait for the AWS Load Balancer Controller to finish
-      # provisioning the real ALB and populate the Ingress's status.
-      kubectl wait --for=jsonpath='{.status.loadBalancer.ingress[0].hostname}' \
-        ingress/bookstore-ingress -n bookstore --timeout=240s
-    EOT
+    interpreter = ["python3"]
+    environment = {
+      CLUSTER_NAME = module.eks.cluster_name
+      REGION       = var.aws_region
+    }
+    command = "${path.module}/../scripts/wait_for_alb_hostname.py"
   }
 }
 

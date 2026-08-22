@@ -157,12 +157,17 @@ resource "null_resource" "force_delete_flow_log_group" {
     region         = data.aws_region.current.name
   }
 
+  # interpreter = ["python3"] makes Terraform invoke python3 DIRECTLY, no
+  # cmd.exe (Windows) or /bin/sh (POSIX) in between -- sidesteps shell-
+  # quoting entirely rather than working around it.
   provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      sleep 15
-      aws logs delete-log-group --log-group-name '${self.triggers.log_group_name}' --region ${self.triggers.region} 2>/dev/null || true
-    EOT
+    when        = destroy
+    interpreter = ["python3"]
+    environment = {
+      LOG_GROUP_NAME = self.triggers.log_group_name
+      REGION         = self.triggers.region
+    }
+    command = "${path.module}/../../../scripts/force_delete_flow_log_group.py"
   }
 }
 

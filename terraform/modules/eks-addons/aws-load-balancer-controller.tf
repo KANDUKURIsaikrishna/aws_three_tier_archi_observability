@@ -306,82 +306,23 @@ resource "null_resource" "delete_ingress_objects" {
 
   depends_on = [helm_release.aws_lb_controller]
 
+  # interpreter = ["python3"] makes Terraform invoke python3 DIRECTLY, no
+  # cmd.exe (Windows) or /bin/sh (POSIX) in between -- sidesteps shell-
+  # quoting entirely rather than working around it. Ported faithfully to
+  # scripts/delete_ingress_objects.py, preserving the exact
+  # fail-loudly-on-kubectl-delete vs. best-effort-on-security-group-poll
+  # semantics documented there (and see that script's own comments for the
+  # incidents each step was written to prevent: silently-swallowed ALB
+  # deletion timeouts orphaning the real ALB, and the controller's shared
+  # backend security group outliving its Ingress objects and blocking
+  # DeleteVpc).
   provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      set -e
-      aws eks update-kubeconfig --name ${self.triggers.cluster_name} --region ${self.triggers.region} 2>/dev/null || true
-
-      # Deliberately NOT `|| true` on these two -- a real ALB deletion (the
-      # controller's own AWS API call, triggered by this finalizer-gated
-      # kubectl delete) can genuinely take several minutes. An earlier
-      # version had a 180s timeout AND `|| true`, so a timeout was silently
-      # swallowed -- Terraform considered this resource "destroyed" either
-      # way and immediately moved on to destroying helm_release.aws_lb_controller
-      # right after, killing the controller mid-deprovision. That orphaned
-      # the real ALB (never actually deleted, `describe-load-balancers`
-      # still showed it `active`) with its ENIs still attached to the VPC's
-      # subnets, which then blocked the subnet/VPC destroy for the rest of
-      # the apply, and left both Ingress objects stuck in Terminating
-      # forever with a finalizer no controller was left alive to clear.
-      # Failing loudly here (real timeout, no swallow) means a genuine
-      # problem surfaces as a clear `terraform destroy` error instead of a
-      # silent orphaned ALB discovered 10+ minutes later as an unrelated-
-      # looking subnet-destroy hang (see TROUBLESHOOTING.md for the incident
-      # this was caught from).
-      #
-      # 480s bumped to 600s after a real, untouched `terraform destroy` (no
-      # network/IAM errors this time -- confirmed via controller logs and
-      # NAT/vpc_cni both still present, so the depends_on fixes above were
-      # working) still hit the timeout on the very first ALB tear-down.
-      # AWS's own ALB deletion genuinely isn't instant -- listener rules,
-      # target groups, then the load balancer itself, sequentially -- and
-      # 480s wasn't always enough headroom, not a sign of anything stuck.
-      kubectl delete ingress --all -n bookstore --wait --timeout=600s --ignore-not-found
-      kubectl delete ingress --all -n gateway --wait --timeout=600s --ignore-not-found
-
-      # The two kubectl waits above only confirm the Ingress OBJECTS (and
-      # their own per-target-group SGs) are gone -- they say nothing about
-      # the controller's separate SHARED "backend" security group
-      # (k8s-traffic-<cluster>-<hash>, tagged elbv2.k8s.aws/cluster, one per
-      # cluster, reused across every Ingress group), which the controller
-      # only deletes once it notices zero Ingress groups reference it left --
-      # a distinct, slightly-later reconcile than clearing the Ingress
-      # finalizer itself. Confirmed via CloudTrail on a real destroy: this
-      # SG's last event before it was found still sitting there (blocking
-      # DeleteVpc ~20 minutes later) was a RevokeSecurityGroupIngress from
-      # the controller's own IRSA session, never a DeleteSecurityGroup --
-      # Terraform proceeded to destroy helm_release.aws_lb_controller (below)
-      # right after this resource returned, cutting the controller off
-      # before it got to this SG specifically.
-      #
-      # This is the ONLY real lever available: aws_vpc has no `timeouts`
-      # block at all (confirmed -- "Unsupported block type" from `terraform
-      # validate` on an attempt to add one), so DeleteVpc is a single,
-      # immediate API call with no Terraform-side retry/backoff to extend.
-      # If this SG still exists by the time module.network.aws_vpc.main's
-      # destroy runs, the whole apply hard-errors on DependencyViolation --
-      # there's no second safety net downstream. So this waits up to 20
-      # minutes (120 x 10s), matching the longest this has actually taken
-      # on a real cluster, specifically so destroy doesn't reach that
-      # unrecoverable step until the SG has had a real chance to clear.
-      # Still `|| true` at the very end -- if even 20 minutes isn't enough,
-      # letting destroy proceed and hard-error on the VPC (with a clear
-      # DependencyViolation message pointing at exactly what to clean up
-      # manually) beats hanging here forever with no error at all.
-      # See TROUBLESHOOTING.md OBS-067.
-      for i in $(seq 1 120); do
-        SG_ID=$(aws ec2 describe-security-groups \
-          --filters "Name=tag:elbv2.k8s.aws/cluster,Values=${self.triggers.cluster_name}" \
-          --region ${self.triggers.region} \
-          --query "SecurityGroups[0].GroupId" --output text 2>/dev/null || echo "")
-        if [ -z "$SG_ID" ] || [ "$SG_ID" == "None" ]; then
-          echo "Controller-managed backend security group already gone."
-          break
-        fi
-        echo "Waiting for controller to clean up its shared backend security group ($SG_ID, attempt $i/120)..."
-        sleep 10
-      done || true
-    EOT
+    when        = destroy
+    interpreter = ["python3"]
+    environment = {
+      CLUSTER_NAME = self.triggers.cluster_name
+      REGION       = self.triggers.region
+    }
+    command = "${path.module}/../../../scripts/delete_ingress_objects.py"
   }
 }

@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """
-configure.py — Stamp real values into all project files that contain placeholders.
+configure.py — Stamp real values into all project files that need them.
 
 Run once after cloning, or any time you change config.env:
     python3 scripts/configure.py
 
+Substitution is regex-anchored on each value's *shape* (domain host,
+12-digit ECR account, GitHub clone URL, AWS region), not a literal
+placeholder string. That matters on a re-run: once a placeholder is
+replaced with a real value, a literal-string replace finds no placeholder
+left to match on the next run, so a later config.env change (new domain,
+new account, new repo) would silently leave the file serving the OLD real
+value forever, no error, no warning. Matching by shape means the current
+value gets found and replaced regardless of whether it's still the
+original placeholder or a real value a previous run already wrote.
+
 In CI the values come from GitHub Secrets automatically — this script is for
 local development / first-time setup only.
 """
+import re
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-PLACEHOLDERS = {
-    "account": "ACCOUNT_ID",
-    "domain":  "YOUR_DOMAIN_HERE.com",
-    "repo":    "YOUR_GITHUB_USERNAME/aws_three_tier_code",
-    "user":    "YOUR_GITHUB_USERNAME",
-    "region":  "AWS_REGION_HERE",
-}
 
 
 def load_config(path: Path) -> dict:
@@ -33,18 +36,17 @@ def load_config(path: Path) -> dict:
     return cfg
 
 
-def substitute(rel_path: str, mapping: dict):
+def substitute(rel_path: str, pattern: str, replacement: str):
     p = REPO_ROOT / rel_path
     if not p.exists():
         print(f"  SKIP  {rel_path} (file not found)")
         return
     text = p.read_text(encoding="utf-8")
-    original = text
-    for old, new in mapping.items():
-        text = text.replace(old, new)
-    if text != original:
-        p.write_text(text, encoding="utf-8")
-        print(f"  [ok]  {rel_path}")
+    new_text, count = re.subn(pattern, replacement, text)
+    if count:
+        p.write_text(new_text, encoding="utf-8")
+        plural = "es" if count != 1 else ""
+        print(f"  [ok]  {rel_path}  ({count} match{plural})")
     else:
         print(f"  --{rel_path}  (already configured)")
 
@@ -70,7 +72,6 @@ def main():
     region      = cfg["AWS_REGION"]
     domain      = cfg["DOMAIN"]
     github_repo = cfg["GITHUB_REPO"]
-    github_user = github_repo.split("/")[0]
     alert_email = cfg["ALERT_EMAIL"]
 
     print(f"\nConfiguring project with:")
@@ -92,55 +93,62 @@ def main():
     )
     print(f"  [ok]  terraform/terraform.tfvars  (generated)")
 
-    # ── 2. k8s/base/ingress/ingress.yaml ─────────────────────────────────────
-    substitute("k8s/base/ingress/ingress.yaml", {
-        PLACEHOLDERS["domain"]: domain,
-    })
+    # ── 2. Domain — bookstore.<domain> / api.bookstore.<domain> convention ──
+    # Explicit file list, NOT a repo-wide scan: k8s/base/monitoring/
+    # prometheus-rules.yaml has PrometheusRule group names like
+    # "bookstore.pods" and "bookstore.http" that would false-positive-match
+    # a looser search across every k8s/**/*.yaml file.
+    domain_pattern = r"bookstore\.[A-Za-z0-9.-]+"
+    for rel_path in [
+        "k8s/base/ingress/ingress.yaml",
+        "k8s/services/api-gateway/base/ingress.yaml",
+        "k8s/services/api-gateway/base/configmap.yaml",
+    ]:
+        substitute(rel_path, domain_pattern, f"bookstore.{domain}")
 
-    # ── 2b. k8s/services/api-gateway/base/configmap.yaml ─────────────────────
-    # FRONTEND_URL is the gateway's CORS allow-origin -- must match the real
-    # frontend host from the ingress above, not a hardcoded placeholder.
-    substitute("k8s/services/api-gateway/base/configmap.yaml", {
-        PLACEHOLDERS["domain"]: domain,
-    })
+    # ── 3. ECR account ID — every overlays/prod/kustomization.yaml ──────────
+    # CI (deploy stage) overwrites the `newName` image field from
+    # secrets.AWS_ACCOUNT_ID on every push anyway — this only matters for a
+    # manual local apply before CI has run once.
+    account_pattern = r"\d{12}(?=\.dkr\.ecr\.)"
+    for path_obj in sorted(REPO_ROOT.glob("k8s/**/overlays/prod/kustomization.yaml")):
+        substitute(str(path_obj.relative_to(REPO_ROOT)), account_pattern, account_id)
 
-    # ── 3. k8s/argocd/application.yaml ───────────────────────────────────────
-    # Replace repo first (longer match), then any leftover bare username
-    substitute("k8s/argocd/application.yaml", {
-        PLACEHOLDERS["repo"]: github_repo,
-        PLACEHOLDERS["user"]: github_user,
-    })
+    # ── 4. GitHub repo URL — every k8s/argocd/*.yaml ────────────────────────
+    repo_pattern = r"https://github\.com/[^\s/]+/[^\s.]+\.git"
+    for path_obj in sorted(REPO_ROOT.glob("k8s/argocd/*.yaml")):
+        substitute(str(path_obj.relative_to(REPO_ROOT)), repo_pattern, f"https://github.com/{github_repo}.git")
 
-    # ── 4. k8s/overlays/prod/kustomization.yaml ───────────────────────────────
-    # CI overwrites image tags on every push via `kustomize edit set image`.
-    # This step only matters for the very first local apply before CI has run.
-    substitute("k8s/overlays/prod/kustomization.yaml", {
-        f"{PLACEHOLDERS['account']}.dkr.ecr": f"{account_id}.dkr.ecr",
-    })
-
-    # ── 5. k8s/base/secrets/external-secret.yaml ──────────────────────────────
-    # The ClusterSecretStore's own `region` field -- every ExternalSecret in
-    # every namespace references this one ClusterSecretStore by name, so a
-    # wrong region here breaks secret sync cluster-wide, not just one service.
-    substitute("k8s/base/secrets/external-secret.yaml", {
-        PLACEHOLDERS["region"]: region,
-    })
+    # ── 5. Region — the shared ClusterSecretStore's own region field ───────
+    # Every service's own ExternalSecret references this one ClusterSecretStore
+    # by name, so a wrong region here breaks secret sync cluster-wide.
+    region_pattern = r"(?<=region: )\S+"
+    substitute("k8s/base/secrets/external-secret.yaml", region_pattern, region)
 
     print(f"""
-Done. Commit the stamped k8s files so ArgoCD deploys the real values, not
-placeholders (it syncs from git, not this local checkout):
+Done. Commit and push the stamped k8s files so ArgoCD deploys the real
+values, not whatever was there before (it syncs from git, not this local
+checkout):
 
-     git add k8s/base/ingress/ingress.yaml k8s/services/api-gateway/base/configmap.yaml \\
-             k8s/argocd/application.yaml k8s/overlays/prod/kustomization.yaml \\
+     git add k8s/base/ingress/ingress.yaml k8s/services/api-gateway/base/ingress.yaml \\
+             k8s/services/api-gateway/base/configmap.yaml \\
+             k8s/argocd/application.yaml k8s/argocd/appproject.yaml \\
+             k8s/argocd/applicationset-microservices.yaml \\
+             k8s/overlays/prod/kustomization.yaml \\
+             k8s/services/*/overlays/prod/kustomization.yaml \\
              k8s/base/secrets/external-secret.yaml
      git commit -m "chore: configure for {domain}"
      git push
 
-Then follow docs/DEPLOYMENT.md starting at Step 1 (this script was Step 2)
-for the actual apply sequence -- Terraform state bootstrap, the apply
-itself, and the post-apply verification steps.
+Then follow docs/DEPLOYMENT.md starting at Step 1 (this script was Step 1's
+own command) for the actual apply sequence -- Terraform state bootstrap,
+the apply itself, and the post-apply verification steps.
 
-Note: config.env and terraform.tfvars are gitignored -- never commit them.
+Note: config.env and terraform/terraform.tfvars are gitignored -- never
+commit them. This is a config-drift script, not a one-time fix: re-run it
+any time config.env changes (new domain, new AWS account, new repo), and
+remember to commit + push the k8s/ changes it makes -- ArgoCD only ever
+syncs from git, never from local disk.
 """)
 
 

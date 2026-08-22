@@ -19,6 +19,10 @@ terraform.tfvars.json
 terraform/environments/*.tfvars
 !terraform/environments/*.tfvars.example
 
+# Python
+__pycache__/
+*.pyc
+
 # Node
 node_modules/
 npm-debug.log*

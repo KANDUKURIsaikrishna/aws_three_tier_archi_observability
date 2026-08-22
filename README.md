@@ -131,7 +131,10 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 │   ├── overlays/dev/ , overlays/prod/
 │   └── argocd/                  # ArgoCD Application manifests
 │
-├── scripts/                     # build-and-push, init-backend, init-domain, configure.py, simulate-load
+├── scripts/                     # build-and-push, init-backend, init-domain, configure.py, simulate-load,
+│                                 #   monitoring_credentials, and the local-exec helpers Terraform invokes
+│                                 #   (derive_ses_smtp_password, wait_for_alb_hostname, cleanup_eks_networking,
+│                                 #   force_delete_flow_log_group, delete_ingress_objects)
 ├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md
 └── .github/workflows/           # ci-cd.yml, terraform.yml, terraform-drift.yml
 ```
@@ -204,7 +207,7 @@ npm run build      # production build → build/
 ./scripts/build-and-push.sh <AWS_ACCOUNT_ID> <AWS_REGION> <IMAGE_TAG> [REACT_APP_API_URL]
 
 # Example
-./scripts/build-and-push.sh 123456789012 us-west-1 v1.2.0 https://api.bookstore.b17facebook.xyz
+./scripts/build-and-push.sh 123456789012 us-west-1 v1.2.0 https://api.bookstore.your-domain.com
 ```
 
 > The CI/CD pipeline performs these steps automatically on every merge to `main`. Manual use of this script is for hotfixes or pre-release testing only.
@@ -262,7 +265,7 @@ Configure these in **Settings → Secrets and variables → Actions** before run
 |---|---|---|
 | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID | `123456789012` |
 | `AWS_ROLE_ARN` | ARN of the OIDC IAM role the pipeline assumes | `arn:aws:iam::123456789012:role/bookstore-github-oidc-role` |
-| `API_URL` | Public URL of the api-gateway (injected into the React build) | `https://api.bookstore.b17facebook.xyz` |
+| `API_URL` | Public URL of the api-gateway (injected into the React build) | `https://api.bookstore.your-domain.com` |
 | `SONAR_TOKEN` | SonarCloud auth token — sonarcloud.io → My Account → Security | `token...` |
 | `SONAR_ORGANIZATION` | SonarCloud organization key | `kandukurisaikrishna` |
 | `SONAR_PROJECT_KEY` | SonarCloud project key | `KANDUKURIsaikrishna_aws_three_tier_archi_observability` |

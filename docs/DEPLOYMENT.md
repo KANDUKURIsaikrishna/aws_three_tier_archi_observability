@@ -1,6 +1,6 @@
 # Deployment
 
-How to actually stand this project up, end to end, from a fresh AWS account. This is the "nothing exists yet" path — the one this project is actually in right now on `observability` (verified 2026-07-31: `aws eks describe-cluster --name bookstore-eks` returns `ResourceNotFoundException` — nothing is running, despite a stale local `kubectl` context suggesting otherwise. Always verify against AWS directly, never trust a cached kubeconfig).
+How to actually stand this project up, end to end, from a fresh AWS account. This is the "nothing exists yet" path (verified 2026-07-31: `aws eks describe-cluster --name bookstore-eks` returns `ResourceNotFoundException` — nothing is running, despite a stale local `kubectl` context suggesting otherwise. Always verify against AWS directly, never trust a cached kubeconfig).
 
 All Terraform (`*.tf`, `modules/`, `environments/`) lives under `terraform/`, not repo root — every raw `terraform` command below runs from inside that directory (`cd terraform` first). `make plan`/`make apply`/`make destroy` from repo root handle this automatically (`Makefile` uses `terraform -chdir=terraform`), if you'd rather not `cd` by hand.
 
@@ -24,6 +24,7 @@ All Terraform (`*.tf`, `modules/`, `environments/`) lives under `terraform/`, no
 ```bash
 cp config.env.example config.env
 # edit config.env: AWS_ACCOUNT_ID, AWS_REGION, DOMAIN, GITHUB_REPO, ALERT_EMAIL
+# (GITHUB_BRANCH is optional -- defaults to "main" if left unset)
 python3 scripts/configure.py
 ```
 
@@ -179,7 +180,7 @@ kubectl port-forward -n gateway svc/gateway-service 8082:80
 curl -s http://localhost:8082/health
 ```
 
-If images haven't been built/pushed by CI yet (first-ever deploy, before any CI run has landed), all 6 pods (`frontend` + the 5 microservices) will sit in `ImagePullBackOff` until real images exist in their ECR repos — **this is expected on a genuinely fresh account**, not a sign anything is broken. Either wait for a CI run to land on `observability` (fastest — just push any commit), or push once by hand per service:
+If images haven't been built/pushed by CI yet (first-ever deploy, before any CI run has landed), all 6 pods (`frontend` + the 5 microservices) will sit in `ImagePullBackOff` until real images exist in their ECR repos — **this is expected on a genuinely fresh account**, not a sign anything is broken. Either wait for a CI run to land on `main` (fastest — just push any commit), or push once by hand per service:
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -248,6 +249,8 @@ terraform output alertmanager_url   # Alertmanager, also user "admin"
 aws secretsmanager get-secret-value --secret-id /bookstore/grafana-admin --query SecretString --output text
 aws secretsmanager get-secret-value --secret-id /bookstore/monitoring-basic-auth --query SecretString --output text
 ```
+
+On Windows, run `python3 scripts/monitoring_credentials.py` instead of the block above — Git Bash silently mangles any argument starting with `/` (like `--secret-id /bookstore/grafana-admin`) into a Windows path before it reaches `aws.exe`, which fails with a confusing "Invalid name" error. The script prints every URL + password in one table, sidestepping that entirely.
 
 `Makefile` has `make monitoring-status` (Docker Compose status on the box) and `make monitoring-logs` (tails the init/dashboard-import logs) — both auto-fetch an auto-generated SSH key from Terraform state via a `monitoring-key` prerequisite target (saved locally as `.monitoring-ssh-key.pem`, gitignored), no manual key management needed.
 

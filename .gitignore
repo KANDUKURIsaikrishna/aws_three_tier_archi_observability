@@ -67,3 +67,7 @@ kubectl.exe
 
 # graphify — local knowledge-graph output, never committed
 graphify-out/
+
+# Gemini diagram-generation prompts — local scratch, never committed
+architecture-diagram-prompt.txt
+cicd-diagram-prompt.txt

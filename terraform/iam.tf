@@ -25,14 +25,27 @@ resource "aws_iam_role" "github_oidc" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
+          # Wildcards after the owner and repo names, not just a literal
+          # "repo:${var.github_repo}:..." match -- GitHub's OIDC token `sub`
+          # claim isn't always the classic "repo:OWNER/REPO:ref:..." shape.
+          # Confirmed via CloudTrail on a real push: some accounts' tokens
+          # come through as "repo:OWNER@ownerId/REPO@repoId:ref:..." (numeric
+          # GitHub IDs appended to both names), which a literal match rejects
+          # outright with "Not authorized to perform sts:AssumeRoleWithWebIdentity"
+          # -- no indication anywhere *why*, since IAM trust-policy denials
+          # don't include the claim it actually received. The wildcards below
+          # match either shape (an exact literal name plus zero extra
+          # characters, or the same name plus "@<id>") without loosening which
+          # owner/repo can assume this role -- the prefix up to each wildcard
+          # still has to match exactly.
           "token.actions.githubusercontent.com:sub" = [
-            "repo:${var.github_repo}:ref:refs/heads/main",
-            "repo:${var.github_repo}:ref:refs/heads/improvements",
+            "repo:${split("/", var.github_repo)[0]}*/${split("/", var.github_repo)[1]}*:ref:refs/heads/main",
+            "repo:${split("/", var.github_repo)[0]}*/${split("/", var.github_repo)[1]}*:ref:refs/heads/improvements",
             # ci-cd.yml's build-and-push job runs on observability too (see
             # CICD.md), but this trust policy was never updated to match —
             # confirmed live: images could never actually push from this
-            # branch until this line existed. See TROUBLESHOOTING.md OBS-005.
-            "repo:${var.github_repo}:ref:refs/heads/observability",
+            # branch until this line existed.
+            "repo:${split("/", var.github_repo)[0]}*/${split("/", var.github_repo)[1]}*:ref:refs/heads/observability",
           ]
         }
       }

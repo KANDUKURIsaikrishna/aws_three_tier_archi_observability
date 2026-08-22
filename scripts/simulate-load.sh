@@ -27,7 +27,13 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-DOMAIN="api.bookstore.b17facebook.xyz"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+RAW_DOMAIN="$(grep -E '^DOMAIN=' "${REPO_ROOT}/config.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')"
+if [ -z "$RAW_DOMAIN" ]; then
+  echo "Couldn't read DOMAIN from config.env -- run this from the repo root with config.env set up (see docs/DEPLOYMENT.md Step 1)." >&2
+  exit 1
+fi
+DOMAIN="api.bookstore.${RAW_DOMAIN}"
 DURATION=180
 RPS=20
 DO_CPU=true
@@ -67,7 +73,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-MONITORING_IP=$(terraform output -raw prometheus_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
+MONITORING_IP=$(terraform -chdir="${REPO_ROOT}/terraform" output -raw prometheus_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
 if [ -z "$MONITORING_IP" ]; then
   echo "Couldn't read prometheus_url from terraform output -- run this from the repo root with the stack applied." >&2
   exit 1
@@ -83,7 +89,18 @@ fi
 
 if [ "$DO_TRAFFIC" = true ]; then
   echo "── Starting traffic load (~${RPS} req/s against https://$DOMAIN/books, ${DURATION}s) ──"
-  ELB=$(aws elb describe-load-balancers --query 'LoadBalancerDescriptions[0].DNSName' --output text)
+  # The real load balancer is an ALB, provisioned by the AWS Load Balancer
+  # Controller reconciling the Ingress -- not created directly by Terraform,
+  # so there's no terraform output for it (and `aws elb describe-load-balancers`,
+  # the CLASSIC ELB API, was a leftover from when this project used
+  # ingress-nginx; it finds nothing for an ALB and would silently return
+  # empty). Reading it straight off the Ingress object's own status is the
+  # same source the rest of this project already uses to discover it.
+  ELB=$(kubectl get ingress bookstore-ingress -n bookstore -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+  if [ -z "$ELB" ]; then
+    echo "Couldn't read the ALB hostname from the bookstore-ingress Ingress -- is the stack up and kubectl pointed at the right cluster?" >&2
+    exit 1
+  fi
   SLEEP=$(python3 -c "print(1/$RPS)")
   (
     END=$((SECONDS + DURATION))
@@ -114,5 +131,5 @@ done
 
 echo
 echo "Done. Prometheus: http://$MONITORING_IP:9090/alerts"
-GRAFANA_IP=$(terraform output -raw grafana_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
+GRAFANA_IP=$(terraform -chdir="${REPO_ROOT}/terraform" output -raw grafana_url 2>/dev/null | sed 's|http://||' | cut -d: -f1)
 [ -n "$GRAFANA_IP" ] && echo "Grafana:    http://$GRAFANA_IP:3000"

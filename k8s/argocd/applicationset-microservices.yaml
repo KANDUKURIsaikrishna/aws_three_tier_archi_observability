@@ -5,10 +5,12 @@
 # plan (user-service, order-service, notification-service, api-gateway) adds
 # one more element here instead of a hand-written Application manifest.
 #
-# targetRevision is pinned to the `observability` branch while this platform
-# is under active development on that branch — switch to `main` (or delete
-# this override and let it inherit) once the work merges and CI's gated
-# deploy stage takes over image-tag bumps, matching k8s/argocd/application.yaml.
+# targetRevision (below, in the template) is stamped from config.env's
+# GITHUB_BRANCH by scripts/configure.py, defaulting to "main" if unset --
+# NOT hand-edited here. Keep this config-driven, not hardcoded, matching
+# k8s/argocd/application.yaml -- a branch name copied over from a different
+# repo/branch layout than the one actually deployed breaks ArgoCD sync
+# outright if that branch doesn't exist in the real repo.
 #
 # Prerequisites: same as k8s/argocd/application.yaml (ArgoCD installed, repo
 # credentials registered if private), plus the scoped AppProject. Apply once:
@@ -46,7 +48,7 @@ spec:
 
       source:
         repoURL: https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
-        targetRevision: observability
+        targetRevision: main
         path: 'k8s/services/{{service}}/overlays/prod'
         kustomize: {}
 

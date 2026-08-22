@@ -35,7 +35,11 @@ client/build/
 *.tfstate.*
 *.tfstate.backup
 .terraform/
-tfplan
+# tfplan* (not just the bare "tfplan"/"*.tfplan" names) -- plan files can
+# contain sensitive resource values in plaintext (unlike `terraform show
+# -json`'s output, the raw plan file is never redacted) and easy to end up
+# with tfplan1, tfplan156, etc. from repeated `-out=tfplan<N>` runs.
+tfplan*
 *.tfplan
 # NOTE: .terraform.lock.hcl is intentionally NOT ignored — commit it like package-lock.json
 

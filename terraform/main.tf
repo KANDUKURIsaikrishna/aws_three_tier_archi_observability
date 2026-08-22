@@ -138,10 +138,47 @@ module "ecr" {
 
 # ── EKS ────────────────────────────────────────────────────────────────────────
 
+# Destroy-time safety net for two resource types that EKS/its own workloads
+# create directly via the EC2 API -- entirely outside Terraform's resource
+# graph, so Terraform has no way to know they exist, let alone clean them
+# up: secondary ENIs the VPC CNI plugin attaches to nodes for pod
+# networking, and the "cluster security group" EKS auto-creates as a side
+# effect of cluster creation. Both can outlive `module.eks`'s own destroy
+# (racing node termination, or EKS's own best-effort SG cleanup failing
+# silently if something's still a member of it at that exact moment) and
+# then block module.network's subnet/VPC destroy with a DependencyViolation
+# neither Terraform nor this project could otherwise see coming.
+#
+# The depends_on below on module.eks (not on this resource) is deliberate,
+# not backwards -- Terraform destroys in reverse dependency order, so
+# "module.eks depends_on this" means module.eks is destroyed FIRST and this
+# resource's destroy-time provisioner runs SECOND, which is exactly the
+# order needed (the ENIs aren't actually orphaned until the nodes that
+# owned them are gone). This resource in turn references module.network's
+# vpc_id, which destroys it before module.network's own subnets/VPC.
+resource "null_resource" "cleanup_eks_networking" {
+  triggers = {
+    vpc_id = module.network.vpc_id
+    region = var.aws_region
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["python3"]
+    command     = "${path.module}/../scripts/cleanup_eks_networking.py"
+
+    environment = {
+      VPC_ID = self.triggers.vpc_id
+      REGION = self.triggers.region
+    }
+  }
+}
+
 module "eks" {
   source          = "./modules/eks"
   cluster_name    = "bookstore-eks"
   cluster_version = "1.31"
+  depends_on      = [null_resource.cleanup_eks_networking]
   prefix          = "bookstore"
   subnet_ids = [
     module.network.private_subnet_ids[0],

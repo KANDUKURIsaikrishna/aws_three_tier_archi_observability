@@ -34,16 +34,13 @@ spec:
 
   source:
     repoURL: https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
-    # targetRevision is pinned to `observability`, NOT `main`, for the same
-    # reason as k8s/argocd/applicationset-microservices.yaml: k8s/overlays/prod
-    # doesn't exist on `main` at all (verified against origin/main directly —
-    # it predates the Kustomize-overlay restructure, which only landed on
-    # `improvements`/`observability`). Pointing this at `main` as originally
-    # written made ArgoCD fail with "ComparisonError: ... app path does not
-    # exist" — not a cluster problem, a real mismatch in this file. Switch
-    # back to `main` (or delete this override) once this branch merges and
-    # `main` actually has the overlay structure.
-    targetRevision: observability
+    # Stamped from config.env's GITHUB_BRANCH by scripts/configure.py
+    # (defaults to "main" if unset) -- keep this config-driven, not
+    # hand-edited. A branch name copied over from a different repo/branch
+    # layout than the one actually deployed breaks ArgoCD sync outright
+    # ("unable to resolve '<branch>' to a commit SHA") if that branch
+    # doesn't exist in the real repo.
+    targetRevision: main
     path: k8s/overlays/prod
     kustomize: {}   # ArgoCD runs `kustomize build k8s/overlays/prod/` to render manifests
 

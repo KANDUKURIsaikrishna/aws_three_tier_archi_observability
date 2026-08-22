@@ -54,15 +54,23 @@ terraform {
   # today's single-environment usage. Running `terraform workspace new
   # staging` gets its own isolated state at
   # `environments/staging/terraform.tfstate` automatically, no key changes
-  # needed by hand. See docs/TERRAFORM.md#environments for the full workflow
-  # and its current limits -- state isolation is real, resource *naming*
-  # isolation (e.g. two workspaces both trying to create an EKS cluster named
-  # "bookstore-eks" in the same account) is not solved by this alone.
+  # needed by hand. See environments/dev.tfvars.example for the full
+  # workflow and its current limits -- state isolation is real, resource
+  # *naming* isolation (e.g. two workspaces both trying to create an EKS
+  # cluster named "bookstore-eks" in the same account) is not solved by
+  # this alone.
+  #
+  # bucket and region are intentionally left empty here -- scripts/init-backend.sh
+  # patches both in place with your real account's bucket name and config.env's
+  # AWS_REGION before the first `terraform init`. Terraform backend blocks can't
+  # reference variables at all (resolved before any variables are evaluated, a
+  # real HCL limitation), so this can only ever be kept correct by exactly that
+  # kind of external patch, not a `var.foo` reference.
   backend "s3" {
-    bucket         = "bookstore-terraform-state-905221885307"
+    bucket               = ""
     key                  = "terraform.tfstate"
     workspace_key_prefix = "environments"
-    region               = "us-west-1"
+    region               = ""
     use_lockfile         = true
     encrypt              = true
   }

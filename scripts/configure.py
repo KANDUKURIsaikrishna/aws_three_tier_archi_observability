@@ -98,7 +98,7 @@ def main():
     # prometheus-rules.yaml has PrometheusRule group names like
     # "bookstore.pods" and "bookstore.http" that would false-positive-match
     # a looser search across every k8s/**/*.yaml file.
-    domain_pattern = r"bookstore\.[A-Za-z0-9.-]+"
+    domain_pattern = r"bookstore\.[A-Za-z0-9._-]+"
     for rel_path in [
         "k8s/base/ingress/ingress.yaml",
         "k8s/services/api-gateway/base/ingress.yaml",

@@ -96,7 +96,7 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 .
 ├── terraform/                  # All infrastructure as code
 │   ├── main.tf                  # Root config — module call order + Helm provider
-│   ├── argocd.tf / cloudfront.tf / cloudtrail.tf / dr.tf / guardduty.tf
+│   ├── argocd.tf / cloudfront.tf / dr.tf
 │   ├── iam.tf / observability-rbac.tf / outputs.tf / providers.tf / variables.tf / versions.tf
 │   ├── modules/                  # Reusable modules
 │   │   ├── ecr/                    # ECR repositories per service
@@ -217,7 +217,7 @@ npm run build      # production build → build/
 
 ## Infrastructure, Deploy, and CI/CD
 
-The platform is provisioned by 8 Terraform modules plus root-level cross-cutting resources (IAM/OIDC, CloudTrail, GuardDuty, CloudFront, DR), and deployed via ArgoCD GitOps across the frontend and five microservice namespaces. Full step-by-step instructions — Terraform state bootstrap, `config.env`/`scripts/configure.py`, the apply itself, and post-apply verification — live in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Module-by-module and traffic-flow detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The platform is provisioned by 8 Terraform modules plus root-level cross-cutting resources (IAM/OIDC, CloudFront, DR), and deployed via ArgoCD GitOps across the frontend and five microservice namespaces. Full step-by-step instructions — Terraform state bootstrap, `config.env`/`scripts/configure.py`, the apply itself, and post-apply verification — live in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Module-by-module and traffic-flow detail is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secret scan (Gitleaks) → test/audit/validate (Vitest + coverage, npm audit, SonarCloud, kubeconform) → build-and-push (Docker build → Trivy scan → ECR push) → deploy on `main` (manual approval gate, `kustomize edit set image` → commit → ArgoCD sync).
 
@@ -254,7 +254,6 @@ The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secr
 | TLS everywhere | cert-manager + Let's Encrypt / ACM; force-redirect HTTP → HTTPS |
 | Progressive delivery | Argo Rollouts — easy rollback if errors spike |
 | Manual deploy gate | GitHub Environments `production` requires reviewer approval |
-| Threat detection | GuardDuty (S3, K8s audit, EBS malware) + multi-region CloudTrail |
 
 ---
 

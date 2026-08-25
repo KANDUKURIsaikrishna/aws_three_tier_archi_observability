@@ -54,24 +54,26 @@ network ──┬─→ security ──┬─→ rds ──→ route53 ──→
           │              └─→ eks ──┬─→ eks-addons ─────┐
           │                        └─→ monitoring-ec2 ←┘ (needs eks + the
 ecr  (independent)                                        eks-addons Grafana
-iam.tf / cloudtrail.tf / guardduty.tf (independent)        secret only, not
+iam.tf (independent)                                       secret only, not
                                                             any Helm install)
 ```
 
-`ecr` and the root `iam.tf`/`cloudtrail.tf`/`guardduty.tf` resources have no dependency on `network` at all and run fully in parallel with it. `rds` and `eks` both depend only on `network`+`security`, not on each other, so they provision concurrently — this is why a full stand-up takes roughly `max(RDS time, EKS time)` for that stage, not the sum. `ingress-cert.tf`'s ACM cert only needs `route53`'s hosted zone to exist (for DNS validation records), not the zone's ALB-pointing alias records specifically, so it doesn't get stuck behind the `eks-addons`/ALB-discovery chain those alias records do wait on. `monitoring-ec2` used to have a blanket `depends_on = [module.eks_addons]` forcing it to wait for every Helm chart in `eks-addons` (up to 900s for ArgoCD) even though it only needs the fast Grafana secret — that's been removed.
+`ecr` and the root `iam.tf` resources have no dependency on `network` at all and run fully in parallel with it. `rds` and `eks` both depend only on `network`+`security`, not on each other, so they provision concurrently — this is why a full stand-up takes roughly `max(RDS time, EKS time)` for that stage, not the sum. `ingress-cert.tf`'s ACM cert only needs `route53`'s hosted zone to exist (for DNS validation records), not the zone's ALB-pointing alias records specifically, so it doesn't get stuck behind the `eks-addons`/ALB-discovery chain those alias records do wait on. `monitoring-ec2` used to have a blanket `depends_on = [module.eks_addons]` forcing it to wait for every Helm chart in `eks-addons` (up to 900s for ArgoCD) even though it only needs the fast Grafana secret — that's been removed.
 
 | Module | Creates | Depends on |
 |---|---|---|
-| `network` | VPC `170.20.0.0/16`, 2 public + 6 private subnets, IGW, single NAT gateway, S3 Gateway VPC Endpoint (free — keeps ECR/S3 traffic off the NAT), VPC Flow Logs | — |
+| `network` | VPC `170.20.0.0/16`, 2 public + 6 private subnets, IGW, single NAT gateway, S3 Gateway VPC Endpoint (free — keeps ECR/S3 traffic off the NAT) | — |
 | `security` | Security groups: ALB (80/443 from internet), RDS (3306 from VPC CIDR) | `network` |
-| `rds` | MySQL 8.0 `db.t3.micro`, Multi-AZ, gp3 storage, Secrets Manager admin credentials, enhanced monitoring, retention-bounded CloudWatch log exports, optional cross-region backup replication | `network`, `security` |
+| `rds` | MySQL 8.0 `db.t3.micro`, Multi-AZ, gp3 storage, Secrets Manager admin credentials, optional cross-region backup replication | `network`, `security` |
 | `route53` | Private zone (RDS internal DNS) + public zone with active-passive failover records | `network`, `rds`, `eks` (needs ALB DNS) |
 | `ecr` | ECR repos for `frontend`, plus any `extra_repos` (currently `catalog-service`, `user-service`, `order-service`, `notification-service`, `api-gateway`), 10-image lifecycle policy, optional cross-region replication — `backend` repo deleted along with the old monolith | — |
 | `eks` | EKS 1.31 cluster, managed node group (`t3.medium`, min 1 / max 3 / desired 3), OIDC provider (enables IRSA), node launch template running node-exporter + Fluent Bit as systemd services | `network`, `security` |
 | `eks-addons` | Helm-installed cluster add-ons: External Secrets Operator, AWS Load Balancer Controller (provisions the ALB), ArgoCD, Argo Rollouts; plus the VPC CNI (NetworkPolicy enforcement), EBS CSI, and metrics-server EKS addons | `eks` |
 | `monitoring-ec2` | Standalone EC2 (`t3.small`) running Prometheus + Grafana + Loki + Alertmanager + kube-state-metrics via Docker Compose | `network`, `eks-addons` |
 
-No `acm` module — the wildcard ACM cert is created directly by root-level `ingress-cert.tf`, not a module. Root-level `.tf` files add cross-cutting resources not owned by any module: `iam.tf` (GitHub OIDC role for CI), `ingress-cert.tf` (wildcard ACM cert for the ingress domain), `cloudtrail.tf` (multi-region trail, encrypted S3), `guardduty.tf` (S3/K8s-audit/EBS-malware detection), `cloudfront.tf` (optional CDN, ACM cert in us-east-1), `dr.tf` (cross-region backup replication).
+No `acm` module — the wildcard ACM cert is created directly by root-level `ingress-cert.tf`, not a module. Root-level `.tf` files add cross-cutting resources not owned by any module: `iam.tf` (GitHub OIDC role for CI), `ingress-cert.tf` (wildcard ACM cert for the ingress domain), `cloudfront.tf` (optional CDN, ACM cert in us-east-1), `dr.tf` (cross-region backup replication).
+
+No CloudWatch, CloudTrail, or GuardDuty anywhere in this stack — removed 2026-08-23. Prometheus/Grafana/Loki/Alertmanager on `monitoring-ec2` already cover metrics, logs, and alerting; GuardDuty findings had no alerting wired to them and nothing ever read CloudTrail, so both were dead weight. VPC Flow Logs, EKS control-plane log export, and RDS Enhanced Monitoring were dropped with them — all three shipped to CloudWatch Logs and nowhere else.
 
 A destroy-time-only `null_resource.cleanup_eks_networking` (root `main.tf`) sits between `network` and `eks` in the destroy graph — `module.eks` `depends_on` it, so on `terraform destroy` it runs after the cluster is gone but before `network`'s VPC/subnets, cleaning up orphaned VPC CNI ENIs and the EKS-auto-created cluster security group (both created directly via the EC2 API, outside Terraform's own resource graph, and both able to block the VPC destroy with `DependencyViolation` if left behind).
 

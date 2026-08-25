@@ -121,7 +121,7 @@ terraform plan -out=tfplan
 #   private Route53 zone (the public zone is looked up, not created — see Step 3),
 #   ECR repos, EKS cluster + node group + OIDC provider,
 #   eks-addons (ESO, AWS Load Balancer Controller, ArgoCD, Argo Rollouts),
-#   monitoring EC2 + EIP, CloudTrail, GuardDuty, GitHub OIDC role,
+#   monitoring EC2 + EIP, GitHub OIDC role,
 #   the ArgoCD AppProject + Application + ApplicationSet (kubectl_manifest, see below)
 terraform apply tfplan
 ```
@@ -313,9 +313,7 @@ terraform destroy
 This project's Terraform has real destroy-safety automation baked in specifically because this stack gets destroyed and recreated often during development:
 
 - Ingress/ALB release before VPC teardown
-- force-delete on the flow-log CloudWatch group
 - `recovery_window_in_days = 0` on Secrets Manager entries
-- `force_destroy = true` on the CloudTrail S3 bucket
 
 `make destroy` runs it with `-auto-approve`; use the plain command if you want the interactive confirmation.
 

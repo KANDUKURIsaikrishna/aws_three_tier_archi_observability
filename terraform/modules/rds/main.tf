@@ -76,51 +76,20 @@ resource "aws_db_instance" "db" {
   deletion_protection       = var.deletion_protection
 
   # ── Performance & Monitoring ──────────────────────────────────────
-  # Performance Insights not supported on db.t3.micro
-  performance_insights_enabled    = false
-  monitoring_interval             = 60
-  monitoring_role_arn             = aws_iam_role.rds_monitoring.arn
-  enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
+  # Performance Insights not supported on db.t3.micro. Enhanced Monitoring
+  # (monitoring_interval/monitoring_role_arn) and enabled_cloudwatch_logs_exports
+  # are both intentionally unset -- both ship to CloudWatch Logs, and this
+  # project has no CloudWatch usage. Prometheus can't reach RDS internals
+  # directly (it's a managed service), so the app-level DB pool metrics each
+  # service exposes on its own /metrics endpoint are the only visibility into
+  # database load from this stack.
+  performance_insights_enabled = false
 
   publicly_accessible    = false
   vpc_security_group_ids = [var.db_security_group_id]
   db_subnet_group_name   = aws_db_subnet_group.rds_subnet_group.name
 
   tags = { Name = var.db_identifier }
-
-  # Ensures the retention-bounded log groups above exist before RDS's own
-  # auto-create-on-first-write would otherwise make them with no expiry.
-  depends_on = [aws_cloudwatch_log_group.rds]
-}
-
-# ── CloudWatch log retention for the 3 exported log streams ──────────────────
-# enabled_cloudwatch_logs_exports above auto-creates these log groups with no
-# expiry if Terraform doesn't manage them first — unbounded storage cost. RDS
-# creates the group itself only if it doesn't already exist, so declaring it
-# here (and ordering it before the DB instance) makes retention apply from
-# the first log line instead of needing a later import.
-resource "aws_cloudwatch_log_group" "rds" {
-  for_each          = toset(["error", "general", "slowquery"])
-  name              = "/aws/rds/instance/${var.db_identifier}/${each.value}"
-  retention_in_days = 30
-}
-
-# Enhanced Monitoring IAM role
-resource "aws_iam_role" "rds_monitoring" {
-  name = "${var.db_identifier}-rds-monitoring"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action    = "sts:AssumeRole"
-      Effect    = "Allow"
-      Principal = { Service = "monitoring.rds.amazonaws.com" }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "rds_monitoring" {
-  role       = aws_iam_role.rds_monitoring.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
 # ── Secret Rotation ───────────────────────────────────────────────────────────

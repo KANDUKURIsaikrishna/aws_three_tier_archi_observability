@@ -20,14 +20,6 @@ resource "aws_kms_alias" "eks_secrets" {
 
 # ── EKS Cluster ───────────────────────────────────────────────────────────────
 
-# EKS auto-creates this log group on first write with no expiry if it doesn't
-# already exist. Declaring it here first (all 5 log types are enabled below)
-# makes 30-day retention apply from the start instead of needing an import.
-resource "aws_cloudwatch_log_group" "eks_cluster" {
-  name              = "/aws/eks/${var.cluster_name}/cluster"
-  retention_in_days = 30
-}
-
 resource "aws_eks_cluster" "this" {
   name     = var.cluster_name
   version  = var.cluster_version
@@ -44,9 +36,9 @@ resource "aws_eks_cluster" "this" {
     authentication_mode = "API_AND_CONFIG_MAP"
   }
 
-  enabled_cluster_log_types = [
-    "api", "audit", "authenticator", "controllerManager", "scheduler"
-  ]
+  # No enabled_cluster_log_types -- control-plane logs (api/audit/
+  # authenticator/controllerManager/scheduler) shipped to CloudWatch Logs are
+  # intentionally not enabled; this project has no CloudWatch usage.
 
   encryption_config {
     provider {
@@ -59,7 +51,6 @@ resource "aws_eks_cluster" "this" {
     aws_iam_role_policy_attachment.cluster_policy,
     aws_iam_role_policy_attachment.cluster_vpc_controller,
     aws_iam_role_policy.cluster_kms,
-    aws_cloudwatch_log_group.eks_cluster,
   ]
 }
 

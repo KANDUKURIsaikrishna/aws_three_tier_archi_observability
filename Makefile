@@ -2,6 +2,11 @@
 
 TF_DIR = terraform
 
+# Only used by `import`'s SES identity line below -- read straight from
+# config.env since aws_sesv2_email_identity's import ID is the email address
+# itself, not a fixed path like the Secrets Manager imports above it.
+ALERT_EMAIL = $(shell grep -E '^ALERT_EMAIL=' config.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 init:
@@ -31,6 +36,18 @@ import:
 	terraform -chdir=$(TF_DIR) import \
 	  aws_secretsmanager_secret.jwt_secret \
 	  /bookstore/jwt-secret 2>/dev/null || echo "jwt-secret already in state"
+	# Same "state lost due to S3 backend" class of problem as the three
+	# imports above -- confirmed live 2026-08-26 against an account with
+	# two different state buckets from past testing
+	# (bookstore-terraform-state-<acct> and a stale -v2). An apply against
+	# whichever bucket ISN'T the one that originally created this identity
+	# hits AlreadyExistsException on aws_sesv2_email_identity.alerts,
+	# even though a real `terraform destroy` against the correct state
+	# does clean it up properly (verified: it's gone from both AWS and
+	# state after a real destroy, this import step is a no-op on that path).
+	terraform -chdir=$(TF_DIR) import \
+	  aws_sesv2_email_identity.alerts \
+	  $(ALERT_EMAIL) 2>/dev/null || echo "SES email identity already in state (or ALERT_EMAIL not set)"
 
 plan: init
 	terraform -chdir=$(TF_DIR) plan

@@ -12,7 +12,7 @@ How to actually stand this project up, end to end, from a fresh AWS account. Thi
 - [Step 3 — Bootstrap the domain](#step-3--bootstrap-the-domain-once-per-domain-ever)
 - [Step 4 — One apply, everything](#step-4--one-apply-everything)
 - [Step 5 — Configure GitHub Secrets & Variables](#step-5--configure-github-secrets--variables-for-cicd)
-- [Step 6 — Import known-conflicting secrets](#step-6--import-known-conflicting-secrets-manager-entries-if-re-deploying)
+- [Step 6 — Import known-conflicting entries](#step-6--import-known-conflicting-entries-if-re-deploying)
 - [Step 7 — Confirm the ExternalSecrets IRSA fix](#step-7--confirm-the-externalsecrets-irsa-fix-actually-took)
 - [Step 8 — Watch all apps come up](#step-8--watch-all-apps-come-up)
 - [Ongoing deploys](#ongoing-deploys-once-the-initial-stand-up-is-done)
@@ -157,15 +157,15 @@ In GitHub: **Settings → Secrets and variables → Actions**.
 
 > Until all the Secrets above exist, expect exactly two failures on every push, both normal for a fresh repo: `Terraform CI/CD` fails at "Configure AWS credentials (OIDC)" (no `AWS_ROLE_ARN` yet), and `DevSecOps Pipeline` fails at the SonarCloud step (no `SONAR_TOKEN` yet). Neither is a region problem or a code problem — just missing secrets.
 
-## Step 6 — Import known-conflicting Secrets Manager entries (if re-deploying)
+## Step 6 — Import known-conflicting entries (if re-deploying)
 
-Only needed if this isn't a truly fresh account — repeated destroy/apply cycles can leave Secrets Manager entries Terraform's state doesn't know about:
+Only needed if this isn't a truly fresh account — a lost or switched Terraform state backend (e.g. pointing `init-backend.sh` at a different S3 bucket than a previous session used) can leave entries in AWS that the *current* state doesn't know about, even though a real `terraform destroy` against the *correct* state cleans all of them up properly: three Secrets Manager secrets (`/bookstore/db-credentials`, `/bookstore/grafana-admin`, `/bookstore/jwt-secret`) plus the SES email identity for `ALERT_EMAIL`. Confirmed live 2026-08-26 against an account with two different state buckets from past testing — an apply against the "wrong" one hit `AlreadyExistsException` on `aws_sesv2_email_identity.alerts`:
 
 ```bash
 make import
 ```
 
-Safe no-op on a genuinely fresh account (`|| echo already imported` on both).
+Safe no-op on a genuinely fresh account (`|| echo already in state` on each).
 
 ## Step 7 — Confirm the ExternalSecrets IRSA fix actually took
 

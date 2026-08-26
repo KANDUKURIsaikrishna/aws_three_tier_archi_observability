@@ -71,6 +71,10 @@ graphify-out/
 # Gemini diagram-generation prompts — local scratch, never committed
 architecture-diagram-prompt.txt
 cicd-diagram-prompt.txt
+terraform-execution-flow-prompt.txt
 
 # Blog series planning/drafts — personal content, never committed
 blog/
+
+# Personal Terraform reference notes — snapshot, not a maintained doc
+terraform-explained.md

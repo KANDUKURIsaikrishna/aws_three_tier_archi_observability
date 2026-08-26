@@ -24,6 +24,7 @@ A production-grade, cloud-native bookstore application on AWS, built as a refere
 8. [Secret Management](#secret-management)
 9. [Security Controls](#security-controls)
 10. [GitHub Secrets Reference](#github-secrets-reference)
+11. [License](#license)
 
 ---
 
@@ -221,6 +222,15 @@ The platform is provisioned by 8 Terraform modules plus root-level cross-cutting
 
 The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secret scan (Gitleaks) → test/audit/validate (Vitest + coverage, npm audit, SonarCloud, kubeconform) → build-and-push (Docker build → Trivy scan → ECR push) → deploy on `main` (manual approval gate, `kustomize edit set image` → commit → ArgoCD sync).
 
+![Bookstore CI/CD Pipeline](CICD_Diagram1.png)
+
+<details>
+<summary>Full stage-by-stage breakdown (secret scan, per-service test matrix, kubeconform, Trivy, GitOps image-tag bump, ArgoCD auto-sync)</summary>
+
+![Bookstore DevSecOps CI/CD Pipeline detail](CiCD_Diagram2.png)
+
+</details>
+
 ---
 
 ## Secret Management
@@ -269,3 +279,9 @@ Configure these in **Settings → Secrets and variables → Actions** before run
 | `SONAR_TOKEN` | SonarCloud auth token — sonarcloud.io → My Account → Security | `token...` |
 | `SONAR_ORGANIZATION` | SonarCloud organization key | `kandukurisaikrishna` |
 | `SONAR_PROJECT_KEY` | SonarCloud project key | `KANDUKURIsaikrishna_aws_three_tier_archi_observability` |
+
+---
+
+## License
+
+[MIT](LICENSE)

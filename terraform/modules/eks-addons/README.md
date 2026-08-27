@@ -1,6 +1,6 @@
 # eks-addons
 
-Helm-installed cluster add-ons: external-secrets (with IRSA), the AWS Load Balancer Controller (with IRSA — provisions the ALB), ArgoCD, Argo Rollouts, and the EBS CSI / VPC CNI / metrics-server EKS addons. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-eks-addons).
+Helm-installed cluster add-ons: external-secrets (with IRSA), the AWS Load Balancer Controller (with IRSA — provisions the ALB), ArgoCD, Argo Rollouts, and the EBS CSI / VPC CNI / metrics-server EKS addons. See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph).
 
 
 <!-- BEGIN_TF_DOCS -->

@@ -1,6 +1,6 @@
 # rds
 
-MySQL RDS instance: Multi-AZ, encrypted at rest, autoscaling storage, Secrets Manager–backed admin credentials with optional automatic rotation and cross-region replication. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-rds).
+MySQL RDS instance: Multi-AZ, encrypted at rest, autoscaling storage, Secrets Manager–backed admin credentials with optional automatic rotation and cross-region replication. (No Enhanced Monitoring / CloudWatch log exports as of 2026-08-23 — removed as unused; visibility into DB load comes from each microservice's own app-level `/metrics`.) See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph).
 
 
 <!-- BEGIN_TF_DOCS -->
@@ -12,11 +12,8 @@ No requirements.
 
 | Name | Type |
 | ---- | ---- |
-| [aws_cloudwatch_log_group.rds](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_db_instance.db](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_instance) | resource |
 | [aws_db_subnet_group.rds_subnet_group](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/db_subnet_group) | resource |
-| [aws_iam_role.rds_monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
-| [aws_iam_role_policy_attachment.rds_monitoring](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy_attachment) | resource |
 | [aws_secretsmanager_secret.db_credentials](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret) | resource |
 | [aws_secretsmanager_secret_rotation.db_credentials](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret_rotation) | resource |
 | [aws_secretsmanager_secret_version.db_credentials](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/secretsmanager_secret_version) | resource |

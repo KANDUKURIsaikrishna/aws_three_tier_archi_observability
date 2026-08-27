@@ -1,6 +1,6 @@
 # monitoring-ec2
 
-Standalone EC2 instance running Prometheus, Grafana, Loki, Alertmanager, and kube-state-metrics via Docker Compose — deliberately outside the EKS cluster (see [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-monitoring-ec2) for why).
+Standalone EC2 instance running Prometheus, Grafana, Loki, Alertmanager, and kube-state-metrics via Docker Compose — deliberately outside the EKS cluster (see [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#why-monitoring-runs-on-ec2-not-in-the-cluster) for why).
 
 
 <!-- BEGIN_TF_DOCS -->

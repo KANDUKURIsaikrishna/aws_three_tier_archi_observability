@@ -1,6 +1,6 @@
 # security
 
-Security groups: RDS (3306, scoped to EKS node subnet CIDRs only — see OBS-049) and any other project-level SGs. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-security).
+Security groups: RDS (3306, scoped to EKS node subnet CIDRs only — previously scoped to the whole VPC CIDR, fixed) and any other project-level SGs. See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph).
 
 
 <!-- BEGIN_TF_DOCS -->

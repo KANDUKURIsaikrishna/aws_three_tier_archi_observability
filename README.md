@@ -84,7 +84,7 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 | GitOps | ArgoCD |
 | Secret Management | AWS Secrets Manager + External Secrets Operator |
 | Observability | Prometheus + Grafana + Loki + Alertmanager on a dedicated EC2 (Docker Compose) |
-| Security Scanning | Trivy (containers), Gitleaks (secrets), tfsec (IaC), SonarCloud (code quality + coverage gate) |
+| Security Scanning | Trivy (containers + IaC config scan), Gitleaks (secrets), SonarCloud (code quality + coverage gate) |
 | TLS | cert-manager + Let's Encrypt / ACM |
 | Testing | Vitest per service, `vi.fn()` mock db |
 | DR | Cross-region (us-west-2) ECR replication + RDS backup replication + Route53 failover |
@@ -136,7 +136,7 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 ├── scripts/                     # build-and-push, init-backend, init-domain, configure.py, simulate-load,
 │                                 #   monitoring_credentials, and the local-exec helpers Terraform invokes
 │                                 #   (derive_ses_smtp_password, wait_for_alb_hostname, cleanup_eks_networking,
-│                                 #   force_delete_flow_log_group, delete_ingress_objects)
+│                                 #   delete_ingress_objects)
 ├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md, UML.md
 └── .github/workflows/           # ci-cd.yml, terraform.yml, terraform-drift.yml
 ```
@@ -255,7 +255,7 @@ The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secr
 | Unit tests | Vitest per service — runs before audit in CI |
 | Dependency CVEs | `npm audit --omit=dev --audit-level=high` per service and frontend |
 | Container CVEs | Trivy blocks pushes on CRITICAL/HIGH unfixed vulns |
-| IaC security | tfsec runs on every Terraform change |
+| IaC security | Trivy's config scanner runs on every Terraform change |
 | No static AWS keys | GitHub OIDC → IAM role assumption |
 | Secrets in-cluster | External Secrets Operator + AWS Secrets Manager |
 | Non-root containers | All pods run as non-root |

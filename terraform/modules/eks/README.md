@@ -1,6 +1,6 @@
 # eks
 
-EKS cluster, managed node group, OIDC provider (IRSA), KMS-encrypted Kubernetes Secrets, and the node launch template that installs node-exporter + Fluent Bit as systemd services. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-eks).
+EKS cluster, managed node group, OIDC provider (IRSA), KMS-encrypted Kubernetes Secrets, and the node launch template that installs node-exporter + Fluent Bit as systemd services. See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph).
 
 
 <!-- BEGIN_TF_DOCS -->
@@ -12,7 +12,6 @@ No requirements.
 
 | Name | Type |
 | ---- | ---- |
-| [aws_cloudwatch_log_group.eks_cluster](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_eks_access_entry.admin](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_access_entry) | resource |
 | [aws_eks_access_policy_association.admin](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_access_policy_association) | resource |
 | [aws_eks_cluster.this](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_cluster) | resource |

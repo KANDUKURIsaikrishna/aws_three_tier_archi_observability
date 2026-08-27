@@ -1,6 +1,6 @@
 # network
 
-VPC, public/private subnets, one NAT Gateway, Internet Gateway, and VPC Flow Logs to CloudWatch. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-network) for the full design rationale.
+VPC, public/private subnets, one NAT Gateway, Internet Gateway, and an S3 Gateway VPC Endpoint. (No VPC Flow Logs / CloudWatch as of 2026-08-23 — removed as unused.) See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph) for the full design rationale.
 
 
 <!-- BEGIN_TF_DOCS -->
@@ -12,11 +12,7 @@ No requirements.
 
 | Name | Type |
 | ---- | ---- |
-| [aws_cloudwatch_log_group.vpc_flow_logs](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/cloudwatch_log_group) | resource |
 | [aws_eip.nat](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eip) | resource |
-| [aws_flow_log.vpc](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/flow_log) | resource |
-| [aws_iam_role.vpc_flow_log](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
-| [aws_iam_role_policy.vpc_flow_log](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
 | [aws_internet_gateway.igw](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/internet_gateway) | resource |
 | [aws_nat_gateway.nat](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/nat_gateway) | resource |
 | [aws_route_table.private](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/route_table) | resource |
@@ -27,7 +23,6 @@ No requirements.
 | [aws_subnet.public](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/subnet) | resource |
 | [aws_vpc.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc) | resource |
 | [aws_vpc_endpoint.s3](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/vpc_endpoint) | resource |
-| [null_resource.force_delete_flow_log_group](https://registry.terraform.io/providers/hashicorp/null/latest/docs/resources/resource) | resource |
 
 ## Inputs
 

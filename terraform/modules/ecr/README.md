@@ -1,6 +1,6 @@
 # ecr
 
-ECR repositories (one per service, generalized via `extra_repos`), image scanning on push, lifecycle retention policy, and optional cross-region replication. See [../../docs/TERRAFORM.md](../../docs/TERRAFORM.md#module-ecr).
+ECR repositories (one per service, generalized via `extra_repos`), image scanning on push, lifecycle retention policy, and optional cross-region replication. See [../../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md#terraform-module-graph).
 
 
 <!-- BEGIN_TF_DOCS -->

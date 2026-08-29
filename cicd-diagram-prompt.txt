@@ -1,0 +1,39 @@
+Create a CI/CD pipeline diagram in the classic AWS CodePipeline visual style — the iconic style used on the AWS CodePipeline console and in AWS's own CI/CD architecture diagrams: a horizontal row of large arrow-shaped "chevron" stage blocks (each stage is a flat rectangle with a triangular notch cut into its right edge and a matching triangular point on its left edge, like a wide arrow pointing right), connected left to right, each stage a solid flat color with a single white icon and a short white label centered inside it.
+
+STYLE REQUIREMENTS (keep this simple — do not add extra boxes, sub-panels, or nested diagrams inside any stage):
+- White background. Flat design, no gradients, no shadows, no 3D.
+- Exactly 5 chevron stage blocks in a single horizontal row, left to right, each one touching/overlapping the next slightly (classic CodePipeline look).
+- Each chevron is ONE solid color, no sub-divisions inside it.
+- Inside each chevron: one simple white icon near the top, and one short label (2-4 words max) in white bold sans-serif text below the icon. Nothing else inside the chevron shape — no bullet lists, no extra boxes.
+- Small text annotations may go directly ABOVE or BELOW each chevron (outside the shape) if more detail is needed — keep each annotation to one short line.
+- A small circle/icon to the left of the first chevron representing the trigger (a GitHub logo), with one small arrow into the first chevron.
+- Below the row of chevrons, add ONE simple box (not a chevron) connected by a dashed arrow from the last chevron, representing what happens after the pipeline finishes.
+
+COLORS (use one distinct flat color per chevron, AWS-style palette):
+1. Gray-blue
+2. Orange
+3. Teal
+4. Purple
+5. Red
+
+THE 5 STAGES (left to right):
+
+Chevron 1 — color gray-blue. Icon: a magnifying glass over a padlock. Label: "Secret Scan". Small text below: "Gitleaks".
+
+Chevron 2 — color orange. Icon: a checkmark shield. Label: "Test & Validate". Small text below: "Vitest, SonarCloud, kubeconform".
+
+Chevron 3 — color teal. Icon: a container/box icon. Label: "Build & Scan". Small text below: "Docker + Trivy".
+
+Chevron 4 — color purple. Icon: an upward arrow into a tray (upload icon). Label: "Push to ECR". Small text below: "Amazon ECR".
+
+Chevron 5 — color red. Icon: a padlock (manual approval symbol). Label: "Deploy Approval". Small text below: "Manual gate + GitOps".
+
+TRIGGER ICON (left of Chevron 1): GitHub logo (simple black octocat mark), with a small arrow labeled "git push" pointing into Chevron 1.
+
+AFTER THE PIPELINE (below Chevron 5, connected by one dashed arrow): a single rounded box containing a small Kubernetes wheel icon, labeled "ArgoCD syncs to EKS cluster".
+
+Small footnote text in a bottom corner, plain gray, smaller than the rest: "Deploys to k8s/overlays/prod only — the dr branch's k8s/overlays/dr (DR standby region) is not yet wired into this pipeline; its image tags stay frozen at whatever scripts/configure.py last stamped."
+
+TITLE at the top, centered, plain black bold text: "Bookstore CI/CD Pipeline"
+
+Keep the whole composition wide, flat, and uncluttered — this should look exactly like a standard AWS CodePipeline stage diagram, not a flowchart, not a swimlane diagram, and not a detailed technical schematic. Render at high resolution, wide landscape orientation.

@@ -69,8 +69,8 @@ kubectl.exe
 graphify-out/
 
 # Gemini diagram-generation prompts — local scratch, never committed
-# (architecture-diagram-prompt.txt tracked on the dr branch only — see below)
-cicd-diagram-prompt.txt
+# (architecture-diagram-prompt.txt and cicd-diagram-prompt.txt tracked on the
+# dr branch only — see below)
 terraform-execution-flow-prompt.txt
 
 # Blog series planning/drafts — personal content, never committed

@@ -1,0 +1,88 @@
+Create a professional cloud architecture diagram in the exact visual style of official AWS Architecture Diagrams (the style used in AWS whitepapers, re:Invent slides, and the AWS Architecture Icons reference guide). Follow AWS's official diagramming conventions precisely:
+
+STYLE REQUIREMENTS:
+- Clean white background, no gradients, no drop shadows, no 3D effects.
+- Use the official AWS Architecture Icons set style: simple flat square icons, each service represented by its standard AWS icon glyph inside a colored square/rounded-square badge.
+- Use AWS's official service category color coding:
+  - Compute (EKS, EC2) = orange (#ED7100)
+  - Networking & Content Delivery (VPC, Route 53, CloudFront, ALB, NAT Gateway, Internet Gateway) = purple (#8C4FFF)
+  - Database (RDS) = blue (#527FFF)
+  - Storage (S3, ECR) = green (#7AA116)
+  - Security, Identity & Compliance (IAM, Secrets Manager, ACM) = red (#DD344C)
+  - Groups/Containers (VPC, Subnet, Availability Zone, Region) = thin dashed or solid outlined rectangles labeled at the top-left corner, standard AWS grouping style (Region as outermost dashed box, VPC as solid box inside it, Availability Zone boxes as dashed subdivisions, Subnet boxes as smaller solid rectangles).
+- Labels in a clean sans-serif font (Amazon Ember / Arial style), small and readable, placed below or beside each icon.
+- Arrows: thin solid dark gray/black lines with arrowheads showing direction of traffic/data flow. Use different line styles (solid vs dashed) to distinguish live traffic from async/replication flows.
+- Include a small legend/key in one corner if multiple line styles are used.
+- Overall composition: top-to-bottom or left-to-right flow, Internet/users at the top or left, data stores at the bottom or right.
+
+DIAGRAM CONTENT — draw exactly this architecture:
+
+TITLE: "Bookstore — AWS Three-Tier Microservices Architecture"
+
+1. Top level, outside all boxes: an "Internet" cloud icon, with icons for end users (browser/mobile icon).
+
+2. Below Internet: Amazon Route 53 icon, labeled "Route 53 (public hosted zone, active-passive failover routing)". Arrow down from Internet to Route 53.
+
+3. Optional dashed-outline branch from Route 53 to an Amazon CloudFront icon labeled "CloudFront (optional, off by default)", which then connects down to the ALB. Also show a direct solid arrow from Route 53 straight to the ALB (bypass path when CloudFront is disabled).
+
+4. A large dashed rectangle labeled "AWS Region: us-west-1 (Primary)" containing everything below.
+
+5. Inside that region box, a solid rectangle labeled "VPC 170.20.0.0/16" containing:
+   a. Two "Availability Zone" dashed sub-boxes side by side, labeled "us-west-1a" and "us-west-1c".
+   b. In each AZ box, a "Public Subnet" solid rectangle containing: an Internet Gateway icon (only needs to appear once, at VPC edge) and, in AZ "us-west-1a" only, a NAT Gateway icon labeled "NAT Gateway (single AZ)".
+   c. An Elastic Load Balancing icon (Application Load Balancer) labeled "ALB (AWS Load Balancer Controller)" sitting at the VPC edge, spanning both AZs' public subnets, fed by Route 53/CloudFront from above.
+   d. Below the ALB, inside each AZ's "Private Subnet — EKS Nodes" solid rectangle, show an Amazon EKS icon labeled "EKS Node Group (t3.medium)". Draw these as a shared cluster: put a larger dashed box around both AZs' EKS node icons labeled "Amazon EKS Cluster: bookstore-eks (v1.31)".
+   e. Inside the EKS cluster box, show 6 small rounded rectangles (Kubernetes-style pod/service icons, or simple labeled boxes) representing:
+      - "frontend" (React/Nginx) — connected directly below/behind the ALB via host `bookstore.<domain>`
+      - "api-gateway" (Node/Express, JWT) — connected directly below/behind the ALB via host `api.bookstore.<domain>`
+      - "catalog-service"
+      - "user-service"
+      - "order-service"
+      - "notification-service"
+      Draw arrows FROM api-gateway TO each of catalog-service, user-service, order-service (labeled "REST"), and an arrow from order-service to notification-service (labeled "internal call").
+   f. Below/beside the EKS cluster box, in "Private Subnet — Data Tier" solid rectangles (one per AZ, dashed connector between them labeled "Multi-AZ"), show an Amazon RDS icon labeled "RDS MySQL 8.0 (Multi-AZ)". Draw arrows from catalog-service, user-service, order-service, and notification-service all converging into RDS (label the bundle of arrows "per-service schema, shared instance").
+   g. Off to the side within the VPC box, a small AWS PrivateLink/VPC Endpoint icon labeled "S3 Gateway VPC Endpoint".
+
+6. Outside the VPC box but still inside the Region box, place these AWS service icons in a row (these are regional/account-level services, not inside the VPC) — each one MUST have its own connecting arrow drawn to whatever it actually talks to, not left floating disconnected:
+   - Amazon ECR icon labeled "ECR (6 repos: frontend + 5 microservices)". Draw a solid arrow FROM ECR INTO the EKS cluster box, labeled "image pull (kubelet)".
+   - AWS Secrets Manager icon labeled "Secrets Manager (/bookstore/*)". Draw a dashed arrow FROM Secrets Manager INTO the EKS cluster box, labeled "External Secrets Operator (IRSA)".
+   - AWS Certificate Manager icon labeled "ACM (wildcard cert)". Draw a solid arrow FROM ACM directly TO the ALB icon (not into the VPC box generally — specifically to the ALB), labeled "TLS certificate (auto-discovered by host)".
+   Both arrows flow OUT toward the workload (ECR → EKS, ACM → ALB) — no CloudWatch, CloudTrail, or GuardDuty anywhere in this diagram; this stack has no AWS-native logging/threat-detection layer, only the Prometheus/Grafana/Loki/Alertmanager stack in step 7.
+
+7. OBSERVABILITY — draw this as its own clearly-bounded region, not a single icon, since nothing in the observability stack runs inside the EKS cluster itself:
+
+   a. A standalone Amazon EC2 icon OUTSIDE the EKS cluster box (inside the public subnet, or clearly separate with its own small labeled container box) titled "Monitoring EC2 (t3.small) — Docker Compose". Inside that container box, draw 5 small labeled rounded-rectangle icons side by side (not just one EC2 glyph):
+      - "Prometheus" (metrics TSDB)
+      - "Grafana" (dashboards, default user admin)
+      - "Loki" (log aggregation)
+      - "Alertmanager" (routes alerts)
+      - "kube-state-metrics" (K8s object-state exporter)
+      Note near this box: "EKS cluster runs zero monitoring pods — everything observability-related lives here instead."
+
+   b. On the EKS node icons themselves (inside the EKS cluster box, from step 5d), add two small tag/badge icons per node labeled "node-exporter" and "Fluent Bit" with a note "(systemd services baked into node launch template, not DaemonSets)".
+
+   c. Draw a solid arrow FROM Prometheus (inside the Monitoring EC2 box) INTO the EKS cluster box, labeled "scrapes node-exporter + service /metrics (static configs + file_sd_configs, no ServiceMonitor/Operator)".
+
+   d. Draw a solid arrow FROM Fluent Bit (on the EKS nodes) TO Loki (inside the Monitoring EC2 box), labeled "log shipping".
+
+   e. Draw a dashed arrow FROM kube-state-metrics (inside the Monitoring EC2 box) INTO the EKS cluster box, labeled "reads cluster object state over network (read-only EKS access entry, no pod inside cluster)".
+
+   f. Draw a short arrow FROM Grafana TO Prometheus and Loki (labeled "queries") to show Grafana as the read/dashboard layer over both.
+
+   g. Draw a dashed arrow FROM Alertmanager OUT to a small "Amazon SES" icon placed near Secrets Manager/ACM in step 6's row, labeled "SMTP alert notifications", then onward from SES to a small email/envelope icon outside the region box labeled "alert_email (on-call)".
+
+   h. Grafana's admin password and the monitoring endpoints' basic-auth credentials are pulled from Secrets Manager — reuse the same dashed "External Secrets"-style arrow convention from step 6, drawn FROM Secrets Manager TO the Monitoring EC2 box, labeled "Grafana admin + basic-auth creds". RDS itself has no separate telemetry arrow — no enhanced monitoring, no CloudWatch log exports; the only visibility into database load is each microservice's own connection-pool metrics on its app-level /metrics endpoint, scraped the same way as any other service.
+
+8. A second region box, roughly the same size and detail level as the primary region box (step 4-7 above, not a small afterthought), labeled "AWS Region: us-west-2 (DR — Active-Passive Standby, opt-in via enable_dr_standby)". Mirror the primary region's internal structure at reduced scale:
+   a. A VPC box (same `170.20.0.0/16` CIDR, network-isolated — no peering to primary) with 2 AZs, public/private subnets, its own Internet Gateway + per-AZ NAT Gateways.
+   b. An ALB icon labeled "ALB (its own AWS Load Balancer Controller)" fed by Route 53's SECONDARY failover record (see step 2/3 — draw a dashed arrow from Route 53 into this ALB, labeled "SECONDARY failover — active only if primary health check fails").
+   c. An "Amazon EKS Cluster: bookstore-eks-dr (v1.31)" dashed box containing the SAME 6 workload icons as the primary cluster (frontend, api-gateway, catalog-service, user-service, order-service, notification-service) — smaller node count (2 nodes vs primary's 3) but otherwise identical topology, since it's the same manifests deployed by an independent ArgoCD instance running inside THIS cluster (not the primary's ArgoCD reaching across regions).
+   d. An RDS icon labeled "RDS db.t3.micro — cross-region READ REPLICA (promotable)". Draw a dashed arrow FROM the primary region's RDS icon (step 5f) INTO this one, labeled "continuous replication (replicate_source_db)".
+   e. A standalone EC2 icon labeled "Monitoring EC2 (t3.small) — independent Prometheus/Grafana/Loki/Alertmanager" (same 5-service internal layout as step 7a, drawn smaller) — the primary's monitoring box is, definitionally, in the region that just failed, so this region needs its own.
+   f. A small Secrets Manager icon labeled "Secrets Manager (cross-region replicas)" — draw a dashed arrow FROM the primary region's Secrets Manager icon (step 6) INTO this one, labeled "replica{} — JWT, DB creds, Grafana/basic-auth".
+   g. A small ACM icon labeled "ACM (separate regional cert, same domain)".
+   h. Small caption under the whole box: "Independent ArgoCD, independent monitoring, independent ALB — only RDS (replica) and Secrets Manager (replicas) connect back to primary. Off by default; roughly doubles running cost while enabled."
+
+9. In a bottom corner, add a small legend: solid arrow = "live traffic", dashed arrow = "async/replication/control-plane".
+
+Render at high resolution, landscape orientation, suitable for a technical architecture slide.

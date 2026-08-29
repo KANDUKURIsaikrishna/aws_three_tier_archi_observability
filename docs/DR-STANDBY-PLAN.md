@@ -215,18 +215,55 @@ Roughly doubles the platform's running cost. Only while
 
 **Not done — needs a real two-region `terraform plan`/`apply` loop (no creds here):**
 
-1. First `plan` with `-var enable_dr_standby=true` — resolve every
-   `# PLAN-CHECK:` note in `dr-standby.tf` (biggest: cross-region encrypted
-   RDS replica may require the *source* to use a CMK, not the AWS-managed key).
-2. `db.bookstore.internal` — confirm/point the matching record in the
-   **primary** private zone; if the per-service secret JSON still stores the
-   raw RDS endpoint as `DB_HOST`, switch it to the DNS name in both regions
-   (main.tf `aws_secretsmanager_secret_version.db_credentials`).
-3. `scripts/configure.py` — stamp `DR_AWS_REGION_HERE` in
-   `k8s/overlays/dr/kustomization.yaml` (same mechanism as `AWS_REGION_HERE`).
-4. CI deploy job — also run `kustomize edit set image` against the `overlays/dr`
-   paths (currently prod-only), or the DR overlay tags drift.
-5. Teardown order — the read replica must be deleted before the source RDS
-   (add a `depends_on`, or "flip the flag off and apply, then destroy").
-6. Blog drafts — the DR section still says "opt-in, compute is the remaining
-   build"; update once a real apply succeeds.
+1. ✅ **Resolved 2026-08-29, live.** First real `-var enable_dr_standby=true`
+   plan/apply ran end-to-end. The CMK `# PLAN-CHECK:` concern didn't
+   materialize — `aws_db_instance.dr_replica` (destination CMK, AWS-managed
+   key on the source) created cleanly, no rejection. Everything else flagged
+   `# PLAN-CHECK:` in `dr-standby.tf` also went through clean on this apply.
+2. **Still unverified.** `db.bookstore.internal` resolution was never
+   exercised end-to-end by a running app this session — no CI build ran on
+   `dr`, so every pod sat `ImagePullBackOff` and never actually opened a DB
+   connection. The Route53 wiring itself (both zones, both records) is
+   correct per `dr-standby.tf`'s own design; only the "does a real
+   mysql2 client actually resolve and connect" step is unproven.
+3. ✅ **Fixed 2026-08-29.** `scripts/configure.py` now stamps
+   `DR_AWS_REGION_HERE` in `k8s/overlays/dr/kustomization.yaml` (plus the
+   `k8s/argocd/dr/*.yaml` repoURL/targetRevision fields and every
+   `k8s/services/*/overlays/dr/kustomization.yaml`'s account ID, none of
+   which the script reached before). See [[terraform-explained.md]]'s
+   `scripts/configure.py` section for the full list of what changed.
+4. **Still open, confirmed real.** CI's deploy job only runs
+   `kustomize edit set image` against `overlays/prod` — `overlays/dr` never
+   gets touched, so the DR cluster runs whatever tag `configure.py` stamped
+   at setup, forever. A `dr` push never reaches the standby region. Not
+   fixed this session — needs `.github/workflows/ci-cd.yml`'s deploy job
+   to also target `k8s/**/overlays/dr` when `enable_dr_standby` is in play.
+5. **Believed correct, untested this session.** `replicate_source_db =
+   module.rds.rds_instance_arn` on `aws_db_instance.dr_replica` does create
+   an implicit dependency edge Terraform destroys in the right order — but
+   this apply cycle stopped short of running `terraform destroy` against the
+   2-region state. First real teardown of this stack is the next step.
+6. Blog drafts — still not updated (out of scope for this apply/destroy
+   validation pass; the "opt-in, compute is the remaining build" framing is
+   now stale but untouched).
+
+---
+
+## Bugs found + fixed via the first live two-region apply (2026-08-29)
+
+Five issues surfaced running `-var enable_dr_standby=true` against real AWS
+for the first time — one was an operator mistake (config drift, not a code
+bug), the other four were genuine defects in this branch's own code, now
+fixed and re-verified live. Full technical detail on each lives in
+[[terraform-explained.md]] and the relevant module's own comments; this is
+the summary.
+
+| # | What broke | Root cause | Fix |
+|---|---|---|---|
+| 1 | `wait_for_alb_hostname` timed out on the very first apply | Operator error, not a code bug: `config.env`'s `GITHUB_BRANCH` was still `main`. `scripts/configure.py` stamped `targetRevision: main` into the primary `Application`, so ArgoCD synced `main`'s (already-scrubbed) content instead of `dr`'s. | Set `GITHUB_BRANCH=dr` in `config.env` before running `configure.py`. Not a code change — a reminder that `configure.py` must be re-run with the right branch whenever you switch which branch you're deploying. |
+| 2 | `terraform plan` failed outright: `Error: Invalid count argument` on `module.route53.aws_route53_record.secondary` | `count = var.secondary_alb_dns != "" ? 1 : 0` — fine when `secondary_alb_dns` was a static var, but `enable_dr_standby` now feeds it from `local.dr_discovered_alb_dns`, a value only known *after* the DR ALB is created in the same apply. Terraform can't resolve `count` from an unknown value at plan time. | New `create_secondary_record` bool input (`modules/route53/variables.tf`), fed from `var.enable_dr_standby \|\| var.secondary_alb_dns != ""` at the root — both plain vars, always statically known — decoupled from the (possibly dynamic) DNS value itself. |
+| 3 | `Error: creating Security Group (bookstore-dr-rds): ... GroupDescription is invalid. Character sets beyond ASCII are not supported.` | An em-dash (`—`) in `aws_security_group.dr_replica`'s description. AWS's `CreateSecurityGroup` API requires pure ASCII. | Replaced the em-dash with a plain hyphen. |
+| 4 | `Error: creating IAM Role (bookstore-aws-lb-controller): ... EntityAlreadyExists` and the same for `bookstore-external-secrets`, then (next apply) `bookstore-monitoring-ec2` | IAM is account-global, not region-scoped. `modules/eks-addons` and `modules/monitoring-ec2` both hardcode their IAM role names (and, for monitoring-ec2, the instance profile name too) with no per-region suffix — `module.eks_addons_dr`/`module.monitoring_ec2_dr` collide outright with the primary's identically-named roles the moment both exist in the same account. The author had already solved this exact class of problem for the Grafana/monitoring-basic-auth Secrets Manager entries (`create_monitoring_secrets` + cross-region `replica{}`) but missed it for these IAM resources. | New `role_name_suffix` string input on both modules (default `""`), appended to every account-global name (`aws_iam_role`, `aws_iam_role_policy`, `aws_iam_instance_profile`). `dr-standby.tf`'s `module.eks_addons_dr`/`module.monitoring_ec2_dr` calls pass `role_name_suffix = "-dr"`. |
+| 5 | `Error: creating Route53 Record: ... InvalidChangeBatch: RRSet of type CNAME with DNS name b17facebook.xyz. is not permitted at apex in zone` | `aws_route53_record.secondary` was a plain CNAME at the zone apex — DNS spec (RFC 1035) forbids a CNAME at the apex (it must coexist with NS/SOA, which a CNAME can't). The original code's own comment had already flagged this exact failure mode as "deliberately deferred… wiring a second, secondary-region-scoped provider through this module is real work" — fix #2 above (`create_secondary_record`) was what finally made the record reachable for the first time, surfacing it. | Added `aws.secondary` as a `configuration_aliases` provider on `modules/route53` (new `versions.tf`), a secondary-region-scoped `data.aws_lb_hosted_zone_id.ingress_lb_secondary` lookup, and converted `secondary` from CNAME to an ALIAS record — same pattern the `primary` record already used. Verified live: `primary` (PRIMARY failover → us-west-1 ALB) and `secondary` (SECONDARY failover → us-west-2 ALB) ALIAS records now sit correctly alongside the zone's NS/SOA records. |
+
+All 6 commits pushed to `dr`. Both regions confirmed fully up and ArgoCD-synced after the fixes; `terraform destroy` on the 2-region stack is the next, still-unrun step (closes item 5 above).

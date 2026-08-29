@@ -69,7 +69,7 @@ kubectl.exe
 graphify-out/
 
 # Gemini diagram-generation prompts — local scratch, never committed
-architecture-diagram-prompt.txt
+# (architecture-diagram-prompt.txt tracked on the dr branch only — see below)
 cicd-diagram-prompt.txt
 terraform-execution-flow-prompt.txt
 
@@ -78,10 +78,8 @@ blog/
 my_blog_draft.md
 my_blog_draft1.md
 
-# Personal Terraform/K8s reference notes — snapshots, not maintained docs
-terraform-explained.md
-k8s-explained.md
-terraform-dependency-graph.md
-terraform-dependency-graph.svg
-terraform-dependency-graph.html
-k8s-dependency-graph.md
+# Personal Terraform/K8s reference + dependency-graph notes — snapshots, not
+# maintained docs on main. Tracked on the dr branch only, where they're kept
+# current against that branch's own DR-standby additions:
+#   architecture-diagram-prompt.txt, terraform-explained.md, k8s-explained.md,
+#   terraform-dependency-graph.{md,svg,html}, k8s-dependency-graph.md

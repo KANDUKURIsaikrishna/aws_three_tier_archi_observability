@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terraform dependency graph — zoomable</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
+  body { background: #fafafa; }
+  @media (prefers-color-scheme: dark) { body { background: #1e1e1e; } }
+
+  #stage {
+    position: absolute; inset: 0;
+    cursor: grab;
+    touch-action: none;
+  }
+  #stage.dragging { cursor: grabbing; }
+
+  #canvas {
+    position: absolute; top: 0; left: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+  #canvas img {
+    display: block;
+    /* keep the SVG at its natural size; JS scales the wrapper */
+    max-width: none;
+    /* white plate behind the transparent SVG so it reads in dark mode too */
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  }
+
+  #hud {
+    position: absolute; left: 12px; bottom: 12px;
+    display: flex; gap: 6px; align-items: center;
+    background: rgba(255,255,255,.9);
+    border: 1px solid #ddd; border-radius: 8px;
+    padding: 6px 8px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.12);
+    user-select: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    #hud { background: rgba(40,40,40,.9); border-color: #444; color: #eee; }
+  }
+  #hud button {
+    font: inherit; font-weight: 600;
+    min-width: 30px; height: 28px;
+    border: 1px solid #ccc; border-radius: 6px;
+    background: #fff; cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) {
+    #hud button { background: #333; border-color: #555; color: #eee; }
+  }
+  #hud button:hover { border-color: #2b6cb0; }
+  #hud .label { opacity: .7; margin-right: 4px; }
+  #pct { font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
+  #hint {
+    position: absolute; right: 12px; top: 12px;
+    background: rgba(255,255,255,.9); border: 1px solid #ddd; border-radius: 8px;
+    padding: 6px 10px; opacity: .8;
+  }
+  @media (prefers-color-scheme: dark) {
+    #hint { background: rgba(40,40,40,.9); border-color: #444; color: #eee; }
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="canvas"><img id="img" src="terraform-dependency-graph.svg" alt="Terraform dependency graph"></div>
+  </div>
+
+  <div id="hint">scroll = zoom · drag = pan · double-click = reset</div>
+
+  <div id="hud">
+    <span class="label">Terraform graph</span>
+    <button id="out" title="Zoom out (-)">&minus;</button>
+    <span id="pct">100%</span>
+    <button id="in" title="Zoom in (+)">+</button>
+    <button id="fit" title="Fit to window (0)">Fit</button>
+    <button id="reset" title="Reset (double-click)">1:1</button>
+  </div>
+
+<script>
+(function () {
+  var stage  = document.getElementById('stage');
+  var canvas = document.getElementById('canvas');
+  var img    = document.getElementById('img');
+  var pctEl  = document.getElementById('pct');
+
+  var scale = 1, tx = 0, ty = 0;
+  var MIN = 0.05, MAX = 12;
+
+  function apply() {
+    canvas.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+    pctEl.textContent = Math.round(scale * 100) + '%';
+  }
+
+  function zoomAt(cx, cy, factor) {
+    var next = Math.min(MAX, Math.max(MIN, scale * factor));
+    factor = next / scale;
+    // keep the point under the cursor fixed
+    tx = cx - (cx - tx) * factor;
+    ty = cy - (cy - ty) * factor;
+    scale = next;
+    apply();
+  }
+
+  function fit() {
+    var iw = img.naturalWidth  || img.width;
+    var ih = img.naturalHeight || img.height;
+    if (!iw || !ih) return;
+    var pad = 40;
+    var s = Math.min((stage.clientWidth - pad) / iw, (stage.clientHeight - pad) / ih);
+    scale = Math.min(MAX, Math.max(MIN, s));
+    tx = (stage.clientWidth  - iw * scale) / 2;
+    ty = (stage.clientHeight - ih * scale) / 2;
+    apply();
+  }
+
+  function reset() {  // 1:1, centered horizontally, top-aligned
+    scale = 1;
+    var iw = img.naturalWidth || img.width;
+    tx = Math.max(20, (stage.clientWidth - iw) / 2);
+    ty = 20;
+    apply();
+  }
+
+  // wheel zoom (trackpad pinch shows up as ctrlKey wheel)
+  stage.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var rect = stage.getBoundingClientRect();
+    var cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+    var factor = Math.exp(-e.deltaY * 0.0015);
+    zoomAt(cx, cy, factor);
+  }, { passive: false });
+
+  // drag pan
+  var dragging = false, lastX = 0, lastY = 0;
+  stage.addEventListener('pointerdown', function (e) {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    stage.classList.add('dragging');
+    stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    tx += e.clientX - lastX; ty += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    apply();
+  });
+  function endDrag(e) {
+    dragging = false; stage.classList.remove('dragging');
+    try { stage.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  stage.addEventListener('dblclick', reset);
+
+  document.getElementById('in').onclick    = function () { zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1.25); };
+  document.getElementById('out').onclick   = function () { zoomAt(stage.clientWidth/2, stage.clientHeight/2, 0.8); };
+  document.getElementById('fit').onclick   = fit;
+  document.getElementById('reset').onclick = reset;
+
+  window.addEventListener('keydown', function (e) {
+    if (e.key === '+' || e.key === '=') zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1.25);
+    else if (e.key === '-') zoomAt(stage.clientWidth/2, stage.clientHeight/2, 0.8);
+    else if (e.key === '0') fit();
+    else if (e.key === '1') reset();
+  });
+
+  if (img.complete) fit(); else img.addEventListener('load', fit);
+  window.addEventListener('resize', function () { /* keep current transform */ });
+})();
+</script>
+</body>
+</html>

@@ -16,7 +16,7 @@ spec:
   description: Bookstore platform — DR standby (frontend + 5 backend microservices)
 
   sourceRepos:
-    - https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
+    - https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git
 
   destinations:
     - server: https://kubernetes.default.svc

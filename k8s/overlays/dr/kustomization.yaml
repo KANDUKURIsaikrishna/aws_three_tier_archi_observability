@@ -28,9 +28,9 @@ patches:
     patch: |
       - op: replace
         path: /spec/provider/aws/region
-        value: DR_AWS_REGION_HERE
+        value: us-west-2
 
 images:
   - name: bookstore-frontend
-    newName: 000000000000.dkr.ecr.us-west-2.amazonaws.com/bookstore-frontend
+    newName: 905221885307.dkr.ecr.us-west-2.amazonaws.com/bookstore-frontend
     newTag: e8be5505

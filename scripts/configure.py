@@ -144,15 +144,30 @@ def main():
         ecr_pattern,
         f"{account_id}.dkr.ecr.{region}.amazonaws.com",
     )
+    # DR overlays (var.enable_dr_standby) pull from the us-west-2 ECR replica,
+    # not the primary region -- same account, different region in the URL, so
+    # this can't reuse the substitute_glob call above. Only present on the dr
+    # branch (k8s/**/overlays/dr/ doesn't exist on main) -- substitute_glob's
+    # own "no files matched" SKIP line makes this a harmless no-op there.
+    substitute_glob(
+        "k8s/**/overlays/dr/kustomization.yaml",
+        ecr_pattern,
+        f"{account_id}.dkr.ecr.{secondary_region}.amazonaws.com",
+    )
 
     # ── 4. ArgoCD repoURL / sourceRepos (https://github.com/<repo>.git) ──────
     # All three k8s/argocd/*.yaml files reference the repo. appproject.yaml's
     # sourceRepos allowlist and applicationset-microservices.yaml's repoURL
     # both have to match application.yaml's, or ArgoCD rejects the
     # Application/ApplicationSet at admission for naming a repo outside its
-    # AppProject's allowlist.
+    # AppProject's allowlist. k8s/argocd/dr/*.yaml (var.enable_dr_standby,
+    # dr branch only) needs the exact same repoURL/sourceRepos stamp -- a
+    # separate glob rather than widening the pattern above to `**`, so a
+    # missing dr/ directory on main stays a clean SKIP instead of silently
+    # changing what the primary glob matches.
     repo_pattern = re.compile(r"https://github\.com/[^\s/]+/[^\s.]+\.git")
     substitute_glob("k8s/argocd/*.yaml", repo_pattern, f"https://github.com/{github_repo}.git")
+    substitute_glob("k8s/argocd/dr/*.yaml", repo_pattern, f"https://github.com/{github_repo}.git")
 
     # ── 5. ArgoCD targetRevision (the branch ArgoCD deploys from) ────────────
     # Only application.yaml and applicationset-microservices.yaml have a
@@ -163,11 +178,15 @@ def main():
     # repo/branch layout than the one actually deployed breaks ArgoCD sync
     # outright ("unable to resolve '<branch>' to a commit SHA") if that
     # branch doesn't exist in the real repo -- config-driven, not hardcoded,
-    # for exactly that reason.
+    # for exactly that reason. Same two dr/ counterparts, same reasoning --
+    # missing on main, so `substitute`'s own SKIP-if-not-found is enough,
+    # no separate existence check needed.
     branch_pattern = re.compile(r"targetRevision: \S+")
     for rel_path in [
         "k8s/argocd/application.yaml",
         "k8s/argocd/applicationset-microservices.yaml",
+        "k8s/argocd/dr/application.yaml",
+        "k8s/argocd/dr/applicationset-microservices.yaml",
     ]:
         substitute(rel_path, branch_pattern, f"targetRevision: {github_branch}")
 
@@ -177,6 +196,16 @@ def main():
     # cluster-wide, not just one service.
     region_pattern = re.compile(r"region: [a-zA-Z0-9_-]+")
     substitute("k8s/base/secrets/external-secret.yaml", region_pattern, f"region: {region}")
+
+    # ── 7. DR standby overlay's ClusterSecretStore region ─────────────────────
+    # k8s/overlays/dr/kustomization.yaml (var.enable_dr_standby, dr branch
+    # only) patches the base ClusterSecretStore to read Secrets Manager in
+    # the SECONDARY region instead -- the standby cluster's ExternalSecrets
+    # pull the primary's cross-region-replicated secrets from
+    # secondary_region, not region. Only the kustomize patch's `value:` line
+    # matches this pattern in that file.
+    dr_region_pattern = re.compile(r"value: [a-zA-Z0-9_-]+")
+    substitute("k8s/overlays/dr/kustomization.yaml", dr_region_pattern, f"value: {secondary_region}")
 
     print(f"""
 Done. Commit and push the stamped k8s files so ArgoCD deploys the real

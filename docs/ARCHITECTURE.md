@@ -1,6 +1,6 @@
 # Architecture
 
-Current state of `main`. This describes what the code actually builds, not an aspirational design.
+Current state of this branch (`main`'s single-region baseline, plus `dr`'s `enable_dr_standby` additions where noted — see [Region layout](#region-layout)). This describes what the code actually builds, not an aspirational design.
 
 ## What this is
 
@@ -46,7 +46,7 @@ Everything above lives in one EKS cluster (`bookstore-eks`, us-west-1), split ac
 **Secondary: us-west-2** — two modes, both opt-in:
 
 - **`enable_dr_replication`** (default off) — data only: ECR image replication + RDS automated-backup replication (needs an explicit KMS key). No compute; a failover is a restore-from-backup.
-- **`enable_dr_standby`** (default off) — full active-passive standby: a second copy of the platform in `var.secondary_region` (`network_dr` + `eks_dr` + `eks_addons_dr` + `monitoring_ec2_dr` in [`dr-standby.tf`](../terraform/dr-standby.tf)) plus a **promotable RDS cross-region read replica**, and cross-region replicas of every Secrets Manager entry the cluster reads. The standby cluster runs its own ArgoCD off `k8s/**/overlays/dr` (us-west-2 ECR images, secrets read locally). Route53's `SECONDARY` failover record is auto-wired to the discovered DR ALB and serves once the primary ALB health check fails; promoting the DB is a manual runbook step. EC2 vCPU quotas are per-region, so this is not gated by the us-west-1 8-vCPU limit. Roughly doubles running cost while enabled. **Not yet verified against a real two-region `terraform plan`** — see the `# PLAN-CHECK:` notes in `dr-standby.tf`, plus [`DR-STANDBY-PLAN.md`](DR-STANDBY-PLAN.md) and [`DR-FAILOVER-RUNBOOK.md`](DR-FAILOVER-RUNBOOK.md).
+- **`enable_dr_standby`** (default off) — full active-passive standby: a second copy of the platform in `var.secondary_region` (`network_dr` + `eks_dr` + `eks_addons_dr` + `monitoring_ec2_dr` in [`dr-standby.tf`](../terraform/dr-standby.tf)) plus a **promotable RDS cross-region read replica**, and cross-region replicas of every Secrets Manager entry the cluster reads. The standby cluster runs its own independent ArgoCD off `k8s/**/overlays/dr` (us-west-2 ECR images, secrets read locally). Route53's `SECONDARY` failover record is auto-wired to the discovered DR ALB and serves once the primary ALB health check fails; promoting the DB is a manual runbook step. EC2 vCPU quotas are per-region, so this is not gated by the us-west-1 8-vCPU limit. Roughly doubles running cost while enabled. **Verified live 2026-08-29** — a real two-region `terraform apply`/`destroy` cycle (`make dr-apply` / `make dr-destroy`), 225 resources, surfaced and fixed 5 real bugs (unknown-value `count`, a non-ASCII security-group description, two account-global IAM-role-name collisions, and an apex CNAME Route53 rejects — see [`DR-STANDBY-PLAN.md`](DR-STANDBY-PLAN.md)'s bug table for the full list). One confirmed, still-open gap: CI's deploy job only ever updates `k8s/overlays/prod`'s image tags, never `overlays/dr`'s — a `dr` push never reaches the standby cluster. See [`DR-STANDBY-PLAN.md`](DR-STANDBY-PLAN.md) and [`DR-FAILOVER-RUNBOOK.md`](DR-FAILOVER-RUNBOOK.md).
 
 With both flags off (the default), us-west-2 holds nothing. See [`dr.tf`](../terraform/dr.tf).
 
@@ -68,7 +68,7 @@ iam.tf (independent)                                       secret only, not
 | Module | Creates | Depends on |
 |---|---|---|
 | `network` | VPC `170.20.0.0/16`, 2 public + 6 private subnets, IGW, NAT gateway per AZ (one private route table each; `single_nat_gateway = true` collapses to one shared NAT), S3 Gateway VPC Endpoint (free — keeps ECR/S3 traffic off the NAT) | — |
-| `security` | Security groups: ALB (80/443 from internet), RDS (3306 from VPC CIDR) | `network` |
+| `security` | Security group: RDS only (3306, scoped to the EKS node subnet CIDRs, not the whole VPC). No ALB security group here — the AWS Load Balancer Controller auto-creates and manages its own (`k8s.io/...` tags, visible in its reconcile logs as "Auto Create SG"), outside this module and outside Terraform's graph entirely | `network` |
 | `rds` | MySQL 8.0 `db.t3.micro`, Multi-AZ, gp3 storage, Secrets Manager admin credentials, optional cross-region backup replication | `network`, `security` |
 | `route53` | Private zone (RDS internal DNS) + public zone with active-passive failover records | `network`, `rds`, `eks` (needs ALB DNS) |
 | `ecr` | ECR repos for `frontend`, plus any `extra_repos` (currently `catalog-service`, `user-service`, `order-service`, `notification-service`, `api-gateway`), 10-image lifecycle policy, optional cross-region replication — `backend` repo deleted along with the old monolith | — |
@@ -81,6 +81,8 @@ No `acm` module — the wildcard ACM cert is created directly by root-level `ing
 No CloudWatch, CloudTrail, or GuardDuty anywhere in this stack — removed 2026-08-23. Prometheus/Grafana/Loki/Alertmanager on `monitoring-ec2` already cover metrics, logs, and alerting; GuardDuty findings had no alerting wired to them and nothing ever read CloudTrail, so both were dead weight. VPC Flow Logs, EKS control-plane log export, and RDS Enhanced Monitoring were dropped with them — all three shipped to CloudWatch Logs and nowhere else.
 
 A destroy-time-only `null_resource.cleanup_eks_networking` (root `main.tf`) sits between `network` and `eks` in the destroy graph — `module.eks` `depends_on` it, so on `terraform destroy` it runs after the cluster is gone but before `network`'s VPC/subnets, cleaning up orphaned VPC CNI ENIs and the EKS-auto-created cluster security group (both created directly via the EC2 API, outside Terraform's own resource graph, and both able to block the VPC destroy with `DependencyViolation` if left behind).
+
+With `enable_dr_standby=true`, the entire graph above runs a second time in `var.secondary_region` (`dr-standby.tf`'s `network_dr → security_groups_dr → eks_dr → eks_addons_dr → monitoring_ec2_dr` plus the RDS read replica), **concurrently** with the primary chain, not after it — only two edges cross between the two: the RDS replica needs the primary RDS instance's ARN, and the discovered DR ALB hostname feeds `module.route53`'s secondary failover record. Full file-by-file detail in the (gitignored, `dr`-branch-only) `terraform-explained.md` Part 5 and `terraform-dependency-graph.md`.
 
 ## Why monitoring runs on EC2, not in the cluster
 
@@ -137,6 +139,8 @@ git push → GitHub Actions CI
 ```
 
 CI never runs `kubectl` directly — it only edits image tags in git, and ArgoCD does the actual apply.
+
+**With `enable_dr_standby=true`**, the DR cluster runs a fully independent ArgoCD instance polling `k8s/**/overlays/dr` the exact same way — but the `deploy` job above only ever runs `kustomize edit set image` against `overlays/prod`. A `dr` push rebuilds and pushes fresh images, but the DR overlays' tags stay frozen at whatever `scripts/configure.py` last stamped; nothing currently keeps them in sync. Confirmed real, not yet fixed — see `DR-STANDBY-PLAN.md`'s "Not done" list.
 
 ## The microservices platform (live — every frontend API call goes through it)
 

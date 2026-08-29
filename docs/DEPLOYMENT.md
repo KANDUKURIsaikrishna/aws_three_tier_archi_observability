@@ -11,6 +11,7 @@ How to actually stand this project up, end to end, from a fresh AWS account. Thi
 - [Step 2 — Bootstrap Terraform state](#step-2--bootstrap-terraform-state-once-per-aws-account)
 - [Step 3 — Bootstrap the domain](#step-3--bootstrap-the-domain-once-per-domain-ever)
 - [Step 4 — One apply, everything](#step-4--one-apply-everything)
+- [DR standby (optional, `dr` branch)](#dr-standby-optional-dr-branch)
 - [Step 5 — Configure GitHub Secrets & Variables](#step-5--configure-github-secrets--variables-for-cicd)
 - [Step 6 — Import known-conflicting entries](#step-6--import-known-conflicting-entries-if-re-deploying)
 - [Step 7 — Confirm the ExternalSecrets IRSA fix](#step-7--confirm-the-externalsecrets-irsa-fix-actually-took)
@@ -61,12 +62,13 @@ Do this **before** Step 2 — Step 2's backend bootstrap reads `AWS_REGION` from
 1. **Writes `terraform.tfvars`** with the 4 variables that have no safe default (`aws_region`, `domain`, `github_repo`, `alert_email`) — everything else in `variables.tf` ships with a working default. Leave `primary_alb_dns` and `secondary_alb_dns` out of `config.env` entirely:
    - `primary_alb_dns` is auto-discovered within the same apply now (see Step 4) — only set it by hand afterward if you want to override discovery and point DNS at a different/manually-managed load balancer.
    - `secondary_alb_dns` stays empty until a secondary-region EKS cluster actually exists (it doesn't yet — see [`ARCHITECTURE.md`](ARCHITECTURE.md#region-layout)).
-2. **Stamps your real domain/repo/account ID/region** over placeholder values (`YOUR_DOMAIN_HERE.com`, `YOUR_GITHUB_USERNAME/aws_three_tier_code`, `ACCOUNT_ID`, `AWS_REGION_HERE`) in five checked-in template files:
+2. **Stamps your real domain/repo/account ID/region** over placeholder values (`YOUR_DOMAIN_HERE.com`, `YOUR_GITHUB_USERNAME/aws_three_tier_code`, `ACCOUNT_ID`, `AWS_REGION_HERE`) in these checked-in template files:
    - `k8s/base/ingress/ingress.yaml`
    - `k8s/services/api-gateway/base/configmap.yaml` (`FRONTEND_URL`, used for CORS)
-   - `k8s/argocd/application.yaml`
-   - `k8s/overlays/prod/kustomization.yaml`
+   - `k8s/argocd/application.yaml`, `applicationset-microservices.yaml`, `appproject.yaml`
+   - `k8s/overlays/prod/kustomization.yaml` and every `k8s/services/*/overlays/prod/kustomization.yaml`
    - `k8s/base/secrets/external-secret.yaml` (the shared `ClusterSecretStore`'s `region` field — every service's `ExternalSecret` references this one by name, so a wrong region here breaks secret sync cluster-wide)
+   - **On the `dr` branch only** (`var.enable_dr_standby`, see [DR standby](#dr-standby-optional-dr-branch) below): the same repo/branch/region stamping also reaches `k8s/argocd/dr/*.yaml` and every `k8s/**/overlays/dr/kustomization.yaml` — nested paths `configure.py` didn't originally cover; that gap was closed once this branch's DR feature was actually live-tested.
 
 **Commit and push those 5 stamped files before your first ArgoCD sync matters** — ArgoCD deploys `k8s/base` and `k8s/services` content straight from git, not from whatever's sitting on your local disk. Skip this and the very first sync deploys the literal placeholder strings, not your real domain:
 
@@ -131,6 +133,30 @@ terraform apply tfplan
 `argocd.tf` also applies `k8s/argocd/appproject.yaml`, `k8s/argocd/application.yaml`, and `k8s/argocd/applicationset-microservices.yaml` directly (via the `kubectl_manifest` resource, `gavinbunney/kubectl` provider) — no more manual `kubectl apply -f k8s/argocd/...` after the fact. All three wait on `module.eks_addons` (they need ArgoCD's CRDs to exist); the Application and ApplicationSet additionally wait on the AppProject, since ArgoCD rejects either one naming a project that doesn't exist.
 
 RDS (~10-15 min) and EKS (~15-20 min) are the slow parts and provision concurrently, since neither depends on the other directly (both depend on `network`/`security`, not on each other). The `eks-addons` Helm releases run after the cluster is up, now fully concurrently with each other too (see [`ARCHITECTURE.md`](ARCHITECTURE.md#terraform-module-graph)). As long as Step 3's NS records were set and have propagated, `aws_acm_certificate_validation.ingress` resolves on its own within a few minutes — no manual registrar step here anymore (that used to be required after *every* destroy+recreate cycle, since the public zone was Terraform-managed and got brand-new NS values each time it was recreated; it's now a `data` lookup instead, see Step 3).
+
+## DR standby (optional, `dr` branch)
+
+Everything above stands up the single-region stack — `main`'s baseline. The `dr` branch adds an opt-in **active-passive standby region** (`var.enable_dr_standby`, off by default): a second full copy of the platform in `var.secondary_region` (own EKS, own ArgoCD, a promotable RDS cross-region read replica, cross-region secret replicas), with Route53 failing over to it automatically if the primary ALB health check fails. See [`ARCHITECTURE.md`](ARCHITECTURE.md#region-layout), [`DR-STANDBY-PLAN.md`](DR-STANDBY-PLAN.md), and [`DR-FAILOVER-RUNBOOK.md`](DR-FAILOVER-RUNBOOK.md) for the full design.
+
+To deploy it, on the `dr` branch, in place of Step 4's plain `terraform apply`:
+
+```bash
+# config.env's GITHUB_BRANCH must be "dr" (not "main") before running
+# scripts/configure.py -- otherwise ArgoCD's Application syncs the wrong
+# branch entirely and nothing ever comes up. Confirmed live: this exact
+# mistake is what broke the very first two-region apply.
+python3 scripts/configure.py
+git add k8s/ && git commit -m "chore: configure for <your-domain> (dr)" && git push
+
+make dr-plan      # terraform plan  -var enable_dr_standby=true -parallelism=20
+make dr-apply     # terraform apply -var enable_dr_standby=true -parallelism=20 -auto-approve
+```
+
+Pass `-var enable_dr_standby=true` on the CLI (what `make dr-*` does), never by hand-editing `terraform.tfvars` — `scripts/configure.py` fully regenerates that file on every run and doesn't know this variable exists, so a manually-appended line there silently vanishes the next time `configure.py` runs.
+
+Expect roughly double the resource count (~225 vs. the single-region ~140) and check `us-west-2`'s own EC2 vCPU quota separately (`aws service-quotas get-service-quota --region us-west-2 --service-code ec2 --quota-code L-1216C47A`) — it's a per-region limit, not shared with `us-west-1`'s.
+
+Verified live 2026-08-29, both regions applied and ArgoCD-synced cleanly, primary+secondary Route53 failover records both correct — see `DR-STANDBY-PLAN.md`'s bug table for the 5 issues that first real run surfaced and fixed. One confirmed, still-open gap: CI's `deploy` job only updates `k8s/overlays/prod`'s image tags, never `overlays/dr`'s, so a `dr` push never actually reaches the standby cluster's running images.
 
 ## Step 5 — Configure GitHub Secrets & Variables for CI/CD
 
@@ -316,6 +342,8 @@ This project's Terraform has real destroy-safety automation baked in specificall
 - `recovery_window_in_days = 0` on Secrets Manager entries
 
 `make destroy` runs it with `-auto-approve`; use the plain command if you want the interactive confirmation.
+
+**If you ever applied with `enable_dr_standby=true`**, destroy with the matching flag too — `make dr-destroy` (or `terraform destroy -var enable_dr_standby=true -parallelism=20`), never the plain `terraform destroy` above. This isn't optional bookkeeping: `providers-dr.tf`'s secondary `helm`/`kubernetes`/`kubectl` provider blocks resolve their connection details from `module.eks_dr`'s outputs, which only exist when the var evaluates `true` — a destroy run with the flag left off can't correctly configure those providers for a state that still has DR resources in it. Verified live 2026-08-29 against a real 225-resource two-region stack; see `DR-STANDBY-PLAN.md`'s teardown-hazard table for the DR-specific safety nets (replica-before-source RDS ordering, DR-region ENI/SG cleanup, per-region isolated `$KUBECONFIG`).
 
 Since `argocd.tf`'s `kubectl_manifest` resources are now what created the ArgoCD `Application`/`ApplicationSet` objects, `terraform destroy` also deletes them — and both carry `resources-finalizer.argocd.argoproj.io`, so ArgoCD deletes everything it manages (all of `k8s/overlays/prod` and every `k8s/services/*/overlays/prod`) before the `Application` object itself actually goes away. This happens automatically, in the right order, before `eks-addons`/`eks` get torn down (Terraform destroys in reverse-dependency order).
 

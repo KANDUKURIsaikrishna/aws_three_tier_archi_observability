@@ -62,7 +62,7 @@ iam.tf (independent)                                       secret only, not
 
 | Module | Creates | Depends on |
 |---|---|---|
-| `network` | VPC `170.20.0.0/16`, 2 public + 6 private subnets, IGW, single NAT gateway, S3 Gateway VPC Endpoint (free — keeps ECR/S3 traffic off the NAT) | — |
+| `network` | VPC `170.20.0.0/16`, 2 public + 6 private subnets, IGW, NAT gateway per AZ (one private route table each; `single_nat_gateway = true` collapses to one shared NAT), S3 Gateway VPC Endpoint (free — keeps ECR/S3 traffic off the NAT) | — |
 | `security` | Security groups: ALB (80/443 from internet), RDS (3306 from VPC CIDR) | `network` |
 | `rds` | MySQL 8.0 `db.t3.micro`, Multi-AZ, gp3 storage, Secrets Manager admin credentials, optional cross-region backup replication | `network`, `security` |
 | `route53` | Private zone (RDS internal DNS) + public zone with active-passive failover records | `network`, `rds`, `eks` (needs ALB DNS) |
@@ -81,7 +81,7 @@ A destroy-time-only `null_resource.cleanup_eks_networking` (root `main.tf`) sits
 
 The original design put `kube-prometheus-stack` in EKS. On a single `t3.medium` node it starved every other pod pulling images and never became `Ready` within any reasonable Helm timeout. The fix: move Prometheus, Grafana, Loki, and Alertmanager to a dedicated EC2 instance running Docker Compose. The EKS cluster itself runs **zero monitoring pods** — `node-exporter` and `Fluent Bit` run as systemd services baked into the node launch template instead of DaemonSets, and `kube-state-metrics` runs as a Docker container on the monitoring EC2, reading the cluster over the network via a read-only EKS access entry.
 
-`k8s/base/monitoring/` still has `ServiceMonitor`/`PrometheusRule` CRD manifests in the repo. **These are effectively inert** — nothing installs the Prometheus Operator that would consume them, and the EC2 Prometheus scrapes via static configs and `file_sd_configs` (a cron script rewriting target files), not via `ServiceMonitor` discovery. Don't assume applying them does anything.
+`k8s/base/monitoring/` once held `ServiceMonitor`/`PrometheusRule` CRD manifests; they were removed (2026-08-29). Nothing installs the Prometheus Operator that would consume them, and the EC2 Prometheus scrapes via static configs and `file_sd_configs` (a cron script rewriting target files), not via `ServiceMonitor` discovery. Re-adding them would also break ArgoCD sync outright — an unknown CRD type fails the whole sync batch (TROUBLESHOOTING.md OBS-012).
 
 ## The database
 
@@ -170,7 +170,7 @@ private[4]  170.20.7.0/24   us-west-1a   — RDS
 private[5]  170.20.8.0/24   us-west-1c   — RDS
 ```
 
-Single NAT gateway in `public[0]` — a deliberate cost tradeoff for a demo/reference project. Production would want one NAT per AZ.
+NAT gateway per AZ by default — one in each public subnet, each AZ's private subnets routed through the NAT in their own AZ, so losing an AZ only takes out that AZ's egress. NAT is a managed service and doesn't count against the account's EC2 vCPU quota, so per-AZ is available even while that quota is capped. Set `single_nat_gateway = true` on the `network` module to collapse back to one shared NAT in `public[0]` (cheaper, single-AZ SPOF) — the old demo default.
 
 ## Traffic flow (current, real split)
 

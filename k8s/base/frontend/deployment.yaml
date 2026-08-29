@@ -15,6 +15,24 @@ spec:
       labels:
         app: frontend
     spec:
+      # Spread replicas across AZs first, then nodes. Soft (ScheduleAnyway) so
+      # it never blocks scheduling on this pod-capacity-tight cluster -- it
+      # only biases the scheduler away from co-locating replicas, so losing a
+      # node or an AZ can't take the whole service down. No extra pods, no
+      # extra vCPU.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: frontend
       # No K8s API access needed by this workload -- don't auto-mount a
       # token nothing here uses.
       automountServiceAccountToken: false

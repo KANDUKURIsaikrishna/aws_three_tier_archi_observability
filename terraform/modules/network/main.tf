@@ -32,17 +32,29 @@ resource "aws_internet_gateway" "igw" {
   tags   = { Name = "bookstore-igw" }
 }
 
-# Elastic IP for NAT Gateway
-resource "aws_eip" "nat" {
-  domain = "vpc"
+# NAT Gateways.
+#   var.single_nat_gateway = true  -> 1 NAT for the whole VPC (single-AZ SPOF)
+#   var.single_nat_gateway = false -> 1 NAT per AZ (default; survives an AZ loss)
+# NAT is a managed service and does not draw on the EC2 vCPU quota, so per-AZ
+# is available even while that quota is capped. The S3 gateway endpoint below
+# still keeps S3/ECR-layer traffic off the NAT(s) either way.
+locals {
+  nat_azs   = distinct([for s in var.public_subnets : s.az])
+  nat_count = var.single_nat_gateway ? 1 : length(local.nat_azs)
 }
 
-# NAT Gateway (single AZ — cost optimised for tech demo; add per-AZ for HA)
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public[0].id
-  tags          = { Name = "bookstore-nat" }
+resource "aws_eip" "nat" {
+  count  = local.nat_count
+  domain = "vpc"
+  tags   = { Name = "bookstore-nat-${count.index + 1}" }
+}
 
+resource "aws_nat_gateway" "nat" {
+  count         = local.nat_count
+  allocation_id = aws_eip.nat[count.index].id
+  # One NAT per public subnet (= per AZ) when multi; all in public[0] when single.
+  subnet_id  = aws_subnet.public[count.index].id
+  tags       = { Name = "bookstore-nat-${count.index + 1}" }
   depends_on = [aws_internet_gateway.igw]
 }
 
@@ -56,26 +68,30 @@ resource "aws_route_table" "public" {
   tags = { Name = "bookstore-public-rt" }
 }
 
-# Private Route Table
+# Private Route Tables — one per NAT Gateway. With per-AZ NAT that means one
+# route table per AZ, each pointing at the NAT in its own AZ so a private
+# subnet's egress never crosses an AZ boundary (and an AZ failure only takes
+# out that AZ's egress, not everyone's).
 resource "aws_route_table" "private" {
+  count  = local.nat_count
   vpc_id = aws_vpc.main.id
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat.id
+    nat_gateway_id = aws_nat_gateway.nat[count.index].id
   }
-  tags = { Name = "bookstore-private-rt" }
+  tags = { Name = "bookstore-private-rt-${count.index + 1}" }
 }
 
 data "aws_region" "current" {}
 
 # S3 Gateway VPC Endpoint — free (no hourly/data charge), routes S3 traffic
 # (ECR image layers are stored in S3, plus Terraform state reads) off the
-# single NAT Gateway instead of paying its per-GB data-processing fee for it.
+# NAT Gateway(s) instead of paying the per-GB data-processing fee for it.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
-  route_table_ids   = [aws_route_table.public.id, aws_route_table.private.id]
+  route_table_ids   = concat([aws_route_table.public.id], aws_route_table.private[*].id)
   tags              = { Name = "bookstore-s3-endpoint" }
 }
 
@@ -87,7 +103,9 @@ resource "aws_route_table_association" "public" {
 }
 
 resource "aws_route_table_association" "private" {
-  count          = length(var.private_subnets)
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private.id
+  count     = length(var.private_subnets)
+  subnet_id = aws_subnet.private[count.index].id
+  # Single NAT: every private subnet -> the one private route table.
+  # Per-AZ NAT: private subnet -> the route table for its own AZ.
+  route_table_id = var.single_nat_gateway ? aws_route_table.private[0].id : aws_route_table.private[index(local.nat_azs, var.private_subnets[count.index].az)].id
 }

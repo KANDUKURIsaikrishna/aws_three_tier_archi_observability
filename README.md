@@ -227,7 +227,7 @@ The GitHub Actions pipeline (`.github/workflows/ci-cd.yml`) runs, per push: secr
 <details>
 <summary>Full stage-by-stage breakdown (secret scan, per-service test matrix, kubeconform, Trivy, GitOps image-tag bump, ArgoCD auto-sync)</summary>
 
-![Bookstore DevSecOps CI/CD Pipeline detail](CiCD_Diagram2.png)
+![Bookstore DevSecOps CI/CD Pipeline detail](CICD_Diagram2.png)
 
 </details>
 

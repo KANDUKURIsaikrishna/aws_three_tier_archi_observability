@@ -76,7 +76,12 @@ terraform-execution-flow-prompt.txt
 # Blog series planning/drafts — personal content, never committed
 blog/
 my_blog_draft.md
+my_blog_draft1.md
 
 # Personal Terraform/K8s reference notes — snapshots, not maintained docs
 terraform-explained.md
 k8s-explained.md
+terraform-dependency-graph.md
+terraform-dependency-graph.svg
+terraform-dependency-graph.html
+k8s-dependency-graph.md

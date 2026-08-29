@@ -1,0 +1,45 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD AppProject — Bookstore (DR standby cluster, us-west-2)
+#
+# Identical scope to k8s/argocd/appproject.yaml, applied into the standby
+# cluster's own ArgoCD by terraform/dr-standby.tf
+# (kubectl_manifest.argocd_appproject_dr, provider = kubectl.secondary).
+# The two clusters run independent ArgoCD instances; this is not hub-spoke.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: bookstore
+  namespace: argocd
+spec:
+  description: Bookstore platform — DR standby (frontend + 5 backend microservices)
+
+  sourceRepos:
+    - https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: bookstore
+    - server: https://kubernetes.default.svc
+      namespace: catalog
+    - server: https://kubernetes.default.svc
+      namespace: user
+    - server: https://kubernetes.default.svc
+      namespace: order
+    - server: https://kubernetes.default.svc
+      namespace: notification
+    - server: https://kubernetes.default.svc
+      namespace: gateway
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: external-secrets.io
+      kind: ClusterSecretStore
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

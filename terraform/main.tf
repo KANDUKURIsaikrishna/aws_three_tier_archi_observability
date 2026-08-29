@@ -135,8 +135,10 @@ module "route53" {
   # local.primary_alb_dns (argocd.tf) auto-discovers the ALB's hostname
   # within this same apply, falling back to var.primary_alb_dns only
   # if that's explicitly set — no more manual second-apply for this value.
-  primary_alb_dns   = local.primary_alb_dns
-  secondary_alb_dns = var.secondary_alb_dns
+  primary_alb_dns = local.primary_alb_dns
+  # When the standby region is up, use its auto-discovered ALB hostname (see
+  # dr-standby.tf); otherwise fall back to the manual var.
+  secondary_alb_dns = var.enable_dr_standby ? local.dr_discovered_alb_dns : var.secondary_alb_dns
   enable_cloudfront = var.enable_cloudfront
   cloudfront_domain = try(aws_cloudfront_distribution.frontend[0].domain_name, "")
 }

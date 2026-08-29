@@ -29,3 +29,9 @@ variable "replica_region" {
   default     = ""
 }
 
+variable "create_monitoring_secrets" {
+  description = "Create the /bookstore/grafana-admin and /bookstore/monitoring-basic-auth Secrets Manager entries (default). Set false in the DR-region instantiation, where those secrets already exist as cross-region replicas of the primary's -- creating them again would collide on the name."
+  type        = bool
+  default     = true
+}
+

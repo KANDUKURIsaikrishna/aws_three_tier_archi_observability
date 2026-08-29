@@ -176,18 +176,44 @@ Roughly doubles the platform's running cost. Only while
 
 ---
 
-## Staging of the implementation
+## Implementation status (branch `dr`)
 
-1. **Provider refactor** — `eks-addons` `configuration_aliases`, primary call
-   site `providers = {}`, add `providers-dr.tf`. Apply → no-op diff on
-   primary. *Gate: primary plan is clean.*
-2. **Secret replication** — replica blocks, `enable_dr_standby` var. Apply
-   with flag off → no-op.
-3. **DB DNS indirection** — `db.bookstore.internal`, per-service `DB_HOST`
-   swap. Apply → services reconnect via DNS (verify checkout still works).
-4. **Secondary network + EKS + addons** — `dr-standby.tf` part 1. Apply with
-   flag on.
-5. **Secondary RDS replica + private zone.**
-6. **Secondary ACM + ALB discovery + ArgoCD bootstrap + `k8s/overlays/dr`.**
-7. **Route53 secondary failover wire-up + monitoring-ec2 DR.**
-8. **Docs + blog + CI matrix + runbook.**
+**Written and `terraform validate`-clean:**
+
+- `enable_dr_standby` + `dr_node_{desired,min,max}_size` vars.
+- Cross-region `replica{}` on all 6 Secrets Manager entries the cluster reads.
+- `eks-addons`: `create_monitoring_secrets` (false in DR — reuse the primary's
+  replicas) and `replica_region` inputs; secret resources + outputs gated.
+- `providers-dr.tf` — `helm`/`kubernetes`/`kubectl` `.secondary`, wired from
+  `module.eks_dr` via `one(...)`/`try(...)` so they're inert when the flag is off.
+- `dr-standby.tf` — `network_dr`, `security_groups_dr`, `eks_dr`,
+  `eks_addons_dr`, `monitoring_ec2_dr`, `aws_db_instance.dr_replica` + KMS +
+  subnet group + SG, `aws_route53_zone.dr_rds_private` (`db.bookstore.internal`
+  → replica), `aws_acm_certificate.ingress_dr` + validation, DR ArgoCD
+  bootstrap (`kubectl_manifest.*_dr`), `null_resource.wait_for_dr_alb_hostname`
+  + `data.kubernetes_ingress_v1.dr_bookstore`. All `count`-gated on
+  `enable_dr_standby`.
+- `k8s/argocd/dr/` (appproject/application/applicationset) + `k8s/overlays/dr/`
+  + `k8s/services/*/overlays/dr/` (5). All render with `kustomize build`.
+- `module.route53` `secondary_alb_dns` fed the discovered DR ALB hostname when
+  the flag is on.
+- Leaf modules (`network`, `security`, `eks`, `monitoring-ec2`) got a
+  `versions.tf` so the explicit `providers = {}` pass-through is warning-free.
+
+**Not done — needs a real two-region `terraform plan`/`apply` loop (no creds here):**
+
+1. First `plan` with `-var enable_dr_standby=true` — resolve every
+   `# PLAN-CHECK:` note in `dr-standby.tf` (biggest: cross-region encrypted
+   RDS replica may require the *source* to use a CMK, not the AWS-managed key).
+2. `db.bookstore.internal` — confirm/point the matching record in the
+   **primary** private zone; if the per-service secret JSON still stores the
+   raw RDS endpoint as `DB_HOST`, switch it to the DNS name in both regions
+   (main.tf `aws_secretsmanager_secret_version.db_credentials`).
+3. `scripts/configure.py` — stamp `DR_AWS_REGION_HERE` in
+   `k8s/overlays/dr/kustomization.yaml` (same mechanism as `AWS_REGION_HERE`).
+4. CI deploy job — also run `kustomize edit set image` against the `overlays/dr`
+   paths (currently prod-only), or the DR overlay tags drift.
+5. Teardown order — the read replica must be deleted before the source RDS
+   (add a `depends_on`, or "flip the flag off and apply, then destroy").
+6. Blog drafts — the DR section still says "opt-in, compute is the remaining
+   build"; update once a real apply succeeds.

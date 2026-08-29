@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# DR standby overlay (us-west-2). Same base as overlays/prod (../../base +
+# hpa-frontend), with two deltas:
+#   1. The ClusterSecretStore reads Secrets Manager in the secondary region
+#      (the primary's cross-region replicas), not us-west-1.
+#   2. The frontend image comes from the us-west-2 ECR replica.
+#
+# Structured like overlays/prod (references ../../base directly, not ../prod)
+# so its own images: block is the authoritative one — chaining off ../prod
+# doesn't work because kustomize's image transformer would need to match the
+# already-rewritten us-west-1 name.
+#
+# DR_AWS_REGION_HERE and the 000000000000 account id + image tag are stamped
+# by scripts/configure.py / CI the same way overlays/prod's are; the DR
+# deploy path must target this overlay (see docs/DR-STANDBY-PLAN.md).
+
+resources:
+  - ../../base
+  - hpa-frontend.yaml
+
+patches:
+  - target:
+      group: external-secrets.io
+      kind: ClusterSecretStore
+      name: aws-secretsmanager
+    patch: |
+      - op: replace
+        path: /spec/provider/aws/region
+        value: DR_AWS_REGION_HERE
+
+images:
+  - name: bookstore-frontend
+    newName: 000000000000.dkr.ecr.us-west-2.amazonaws.com/bookstore-frontend
+    newTag: e8be5505

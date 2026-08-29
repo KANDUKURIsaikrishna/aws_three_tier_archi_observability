@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Application — Bookstore frontend + shared cluster resources
+# (DR standby cluster, us-west-2).
+#
+# Same as k8s/argocd/application.yaml but renders k8s/overlays/dr, which
+# layers two deltas onto overlays/prod: the ClusterSecretStore reads Secrets
+# Manager in the secondary region, and images come from the us-west-2 ECR
+# replica. Applied by terraform/dr-standby.tf.
+# ─────────────────────────────────────────────────────────────────────────────
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bookstore
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: bookstore
+
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
+    targetRevision: main
+    path: k8s/overlays/dr
+    kustomize: {}
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: bookstore
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

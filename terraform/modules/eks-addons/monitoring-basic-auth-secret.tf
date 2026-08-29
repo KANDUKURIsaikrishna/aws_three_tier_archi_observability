@@ -10,11 +10,13 @@
 # datasource config so its dashboards keep working (Grafana talks to both
 # over the same auth now, not the public internet).
 resource "random_password" "monitoring_basic_auth" {
+  count   = var.create_monitoring_secrets ? 1 : 0
   length  = 24
   special = false
 }
 
 resource "aws_secretsmanager_secret" "monitoring_basic_auth" {
+  count                   = var.create_monitoring_secrets ? 1 : 0
   name                    = "/bookstore/monitoring-basic-auth"
   recovery_window_in_days = 0 # 0 = force delete on destroy, no soft-delete window — see TF-012
 
@@ -27,6 +29,7 @@ resource "aws_secretsmanager_secret" "monitoring_basic_auth" {
 }
 
 resource "aws_secretsmanager_secret_version" "monitoring_basic_auth" {
-  secret_id     = aws_secretsmanager_secret.monitoring_basic_auth.id
-  secret_string = random_password.monitoring_basic_auth.result
+  count         = var.create_monitoring_secrets ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.monitoring_basic_auth[0].id
+  secret_string = random_password.monitoring_basic_auth[0].result
 }

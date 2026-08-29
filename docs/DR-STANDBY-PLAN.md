@@ -238,11 +238,26 @@ Roughly doubles the platform's running cost. Only while
    at setup, forever. A `dr` push never reaches the standby region. Not
    fixed this session — needs `.github/workflows/ci-cd.yml`'s deploy job
    to also target `k8s/**/overlays/dr` when `enable_dr_standby` is in play.
-5. **Believed correct, untested this session.** `replicate_source_db =
+5. ✅ **Resolved 2026-08-29, live.** `replicate_source_db =
    module.rds.rds_instance_arn` on `aws_db_instance.dr_replica` does create
-   an implicit dependency edge Terraform destroys in the right order — but
-   this apply cycle stopped short of running `terraform destroy` against the
-   2-region state. First real teardown of this stack is the next step.
+   the right implicit dependency edge — the replica destroyed cleanly before
+   the source RDS instance on the real teardown, confirmed in the log
+   (`aws_db_instance.dr_replica` gone well before `module.rds.aws_db_instance.db`
+   started destroying). Full 225-resource destroy: `us-west-1` (136
+   resources) destroyed clean in one pass; `us-west-2`'s
+   `module.eks_addons_dr[0].helm_release.external_secrets` Helm uninstall
+   hung and hit its `context deadline exceeded` timeout on the first attempt
+   (15+ min, vs. the primary region's identical release which uninstalled in
+   48s) — a plain re-run of `terraform destroy -var enable_dr_standby=true`
+   picked up exactly where it left off and completed the remaining 45
+   resources cleanly, including the DR-region ENI/cluster-SG cleanup
+   (confirmed empty). Everything else in the DR chain (ArgoCD, Argo
+   Rollouts, AWS LB Controller, the RDS replica, monitoring EC2) uninstalled
+   normally around it, so this reads as a one-off transient (a stuck
+   webhook or a brief API-server blip in that region at that moment), not a
+   deterministic bug — but it's real and worth knowing about: **a DR
+   teardown may need a retry.** `terraform destroy` is idempotent and safe
+   to just re-run if this happens again.
 6. Blog drafts — still not updated (out of scope for this apply/destroy
    validation pass; the "opt-in, compute is the remaining build" framing is
    now stale but untouched).

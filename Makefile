@@ -1,4 +1,4 @@
-.PHONY: init import plan apply destroy monitoring-status monitoring-logs monitoring-key
+.PHONY: init import plan apply destroy dr-plan dr-apply dr-destroy monitoring-status monitoring-logs monitoring-key
 
 TF_DIR = terraform
 
@@ -58,6 +58,20 @@ apply: init import
 
 destroy:
 	terraform -chdir=$(TF_DIR) destroy -auto-approve
+
+# ── DR standby region (var.enable_dr_standby) ─────────────────────────────────
+# The two regions provision/tear down concurrently -- higher -parallelism
+# because a both-flags run has ~2x the resource count. See
+# docs/DR-STANDBY-PLAN.md and docs/DR-FAILOVER-RUNBOOK.md.
+
+dr-plan: init
+	terraform -chdir=$(TF_DIR) plan -var enable_dr_standby=true -parallelism=20
+
+dr-apply: init import
+	terraform -chdir=$(TF_DIR) apply -auto-approve -var enable_dr_standby=true -parallelism=20
+
+dr-destroy:
+	terraform -chdir=$(TF_DIR) destroy -auto-approve -var enable_dr_standby=true -parallelism=20
 
 # ── Monitoring helpers ────────────────────────────────────────────────────────
 

@@ -88,6 +88,11 @@ resource "null_resource" "wait_for_alb_hostname" {
     environment = {
       CLUSTER_NAME = module.eks.cluster_name
       REGION       = var.aws_region
+      # Isolated kubeconfig so this `aws eks update-kubeconfig` + `kubectl
+      # wait` can't race the DR region's identical provisioner
+      # (dr-standby.tf) over a shared ~/.kube/config current-context when a
+      # two-region apply runs them concurrently.
+      KUBECONFIG = "${path.module}/.terraform/kubeconfig-primary"
     }
     command = "${path.module}/../scripts/wait_for_alb_hostname.py"
   }

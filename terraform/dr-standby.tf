@@ -10,6 +10,31 @@
 #
 # NOT plan-verified in-repo (needs AWS creds + a two-region `terraform plan`).
 # Known things to check on the first real plan are tagged `# PLAN-CHECK:`.
+#
+# ── Apply time ───────────────────────────────────────────────────────────────
+# The two regions provision CONCURRENTLY: nothing here depends on the primary
+# modules except aws_db_instance.dr_replica (waits on module.rds) and the DR
+# ACM validation records (write into the primary's public zone, which resolves
+# early). So a both-flags apply ≈ max(primary, DR) wall time, not the sum.
+# With ~2x the resource count, bump parallelism:  terraform apply -parallelism=20
+#
+# ── Destroy: the same hazards as the single-region teardown, mirrored ─────────
+#   * Orphaned VPC-CNI ENIs + EKS-auto cluster SG blocking VpcDelete →
+#     null_resource.cleanup_eks_networking_dr (below), with module.eks_dr
+#     depends_on it, same as the primary's cleanup_eks_networking.
+#   * ALB / Ingress teardown + the LB-controller pod needing NAT egress →
+#     module.eks_addons_dr's own null_resource.delete_ingress_objects, and
+#     `depends_on = [module.eks_dr, module.network_dr]` keeps the DR NAT alive
+#     until that finishes. Its kubectl calls use a per-region $KUBECONFIG so a
+#     concurrent two-region destroy can't cross wires.
+#   * NEW hazard — aws_db_instance.dr_replica: AWS refuses to delete a source
+#     RDS that still has a replica. The `replicate_source_db =
+#     module.rds.rds_instance_arn` reference makes Terraform destroy the
+#     replica BEFORE module.rds automatically. If you ever break that edge,
+#     add an explicit depends_on. (After a real failover the replica is
+#     promoted/standalone and this no longer applies.)
+#   * aws_route53_zone.dr_rds_private is VPC-associated to module.network_dr →
+#     destroyed before it, records first. No extra wiring needed.
 # ═════════════════════════════════════════════════════════════════════════════
 
 locals {
@@ -360,6 +385,9 @@ resource "null_resource" "wait_for_dr_alb_hostname" {
     environment = {
       CLUSTER_NAME = module.eks_dr[0].cluster_name
       REGION       = var.secondary_region
+      # Isolated kubeconfig — see the matching note on the primary's
+      # null_resource.wait_for_alb_hostname in argocd.tf.
+      KUBECONFIG = "${path.module}/.terraform/kubeconfig-dr"
     }
     command = "${path.module}/../scripts/wait_for_alb_hostname.py"
   }

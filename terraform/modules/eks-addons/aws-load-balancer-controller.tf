@@ -322,6 +322,13 @@ resource "null_resource" "delete_ingress_objects" {
     environment = {
       CLUSTER_NAME = self.triggers.cluster_name
       REGION       = self.triggers.region
+      # Per-region kubeconfig so this destroy-time `update-kubeconfig` +
+      # `kubectl delete` can't race the other region's copy of this same
+      # module (dr-standby.tf's module.eks_addons_dr) over a shared
+      # ~/.kube/config when a two-region `terraform destroy` runs them at
+      # once -- otherwise one region's kubectl could delete Ingress objects
+      # in the wrong cluster.
+      KUBECONFIG = "${path.module}/../../.terraform/kubeconfig-ingress-${self.triggers.region}"
     }
     command = "${path.module}/../../../scripts/delete_ingress_objects.py"
   }

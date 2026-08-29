@@ -126,19 +126,32 @@ Not gated by the `us-west-1` 8-vCPU quota — EC2 vCPU quotas are per-region.
 
 ## Apply / destroy ordering
 
-- **Apply:** primary stack unchanged. Secondary `module.network_dr` →
-  `eks_dr` → `eks_addons_dr` (Helm) → ArgoCD bootstrap → ALB discovery →
-  `route53` secondary record. `aws_db_instance.dr_replica` depends on
-  `module.rds` (source) **and** `module.network_dr` (subnet group). Expect
-  the secondary apply to add ~20–25 min on top of the primary.
-- **Destroy:** the read replica must be deleted **before** the source RDS
-  instance (AWS refuses to drop a replicated source). Add
-  `aws_db_instance.dr_replica` to the primary RDS module's implicit
-  teardown-before set via `depends_on`, or document "disable
-  `enable_dr_standby` and apply, then full destroy". The secondary cluster
-  needs the same `null_resource.cleanup_eks_networking` +
-  `delete_ingress_objects` treatment the primary has — instantiate those for
-  the DR VPC too.
+### Apply — the two regions run concurrently
+
+Nothing in `dr-standby.tf` depends on the primary modules except
+`aws_db_instance.dr_replica` (waits on `module.rds`) and the DR ACM
+validation records (write into the primary's public zone, which resolves
+early). So `module.network_dr → eks_dr → eks_addons_dr → ArgoCD → ALB
+discovery` runs **alongside** the primary chain, not after it. A both-flags
+apply ≈ `max(primary, DR)` wall time, roughly the same as a single-region
+apply plus a ~10–15 min tail. Use `-parallelism=20` (the `dr-*` Makefile
+targets do) since the resource count roughly doubles.
+
+### Destroy — same hazards as the single-region teardown, all mirrored
+
+| Hazard (single-region incident) | DR handling |
+|---|---|
+| Orphaned VPC-CNI ENIs + EKS-auto cluster SG block `DeleteVpc` | `null_resource.cleanup_eks_networking_dr`, with `module.eks_dr` `depends_on` it — same shape as the primary's `cleanup_eks_networking`. Script is boto3-only (no kubectl), region-parametrised. |
+| ALB/Ingress not torn down; LB-controller pod needs NAT egress | `module.eks_addons_dr`'s own `null_resource.delete_ingress_objects` runs on destroy; `depends_on = [module.eks_dr, module.network_dr]` keeps the DR NAT up until it finishes. |
+| Concurrent two-region destroy: both `delete_ingress_objects` / `wait_for_alb_hostname` do `aws eks update-kubeconfig` + `kubectl` and would race a shared `~/.kube/config` current-context | Each provisioner now sets a **per-region `$KUBECONFIG`** (`.terraform/kubeconfig-{primary,dr,ingress-<region>}`), so the two never share config state. |
+| **New:** AWS refuses `DeleteDBInstance` on an RDS source that still has a replica | `replicate_source_db = module.rds.rds_instance_arn` makes Terraform destroy `aws_db_instance.dr_replica` **before** `module.rds` automatically. (After a real failover the replica is promoted → standalone → moot.) |
+| Private hosted zone won't delete with records / VPC still attached | `aws_route53_zone.dr_rds_private` is VPC-associated to `module.network_dr` and its record references the zone → destroyed in the right order with no extra wiring. |
+
+`make dr-destroy` (or `terraform destroy -var enable_dr_standby=true
+-parallelism=20`) tears down both regions. To drop only the standby: set
+`enable_dr_standby=false` and `terraform apply` — every DR resource is
+`count`-gated, so that removes them in dependency order without touching the
+primary.
 
 ---
 

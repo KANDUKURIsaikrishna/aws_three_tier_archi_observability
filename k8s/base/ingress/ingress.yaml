@@ -18,9 +18,9 @@ spec:
   ingressClassName: alb
   tls:
     - hosts:
-        - bookstore.b17facebook.xyz
+        - bookstore.YOUR_DOMAIN_HERE.com
   rules:
-    - host: bookstore.b17facebook.xyz
+    - host: bookstore.YOUR_DOMAIN_HERE.com
       http:
         paths:
           - path: /

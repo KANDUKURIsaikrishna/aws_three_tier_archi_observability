@@ -26,7 +26,7 @@ spec:
   description: Bookstore platform — frontend + 5 backend microservices
 
   sourceRepos:
-    - https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git
+    - https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
 
   destinations:
     - server: https://kubernetes.default.svc

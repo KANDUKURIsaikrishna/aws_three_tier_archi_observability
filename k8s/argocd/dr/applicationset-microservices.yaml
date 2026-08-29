@@ -36,7 +36,7 @@ spec:
       project: bookstore
       source:
         repoURL: https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git
-        targetRevision: main
+        targetRevision: dr
         path: 'k8s/services/{{service}}/overlays/dr'
         kustomize: {}
       destination:

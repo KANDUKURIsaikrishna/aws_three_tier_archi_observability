@@ -35,3 +35,20 @@ variable "create_monitoring_secrets" {
   default     = true
 }
 
+variable "role_name_suffix" {
+  description = <<-EOT
+    Appended to the aws-lb-controller and external-secrets IAM role names
+    (e.g. "bookstore-aws-lb-controller${suffix}"). Empty by default (primary
+    region). Unlike create_monitoring_secrets/replica_region above, these two
+    IAM roles have no cross-region-replica option -- IAM is account-global,
+    not region-scoped, so a second same-named module.eks_addons instantiation
+    (var.enable_dr_standby's module.eks_addons_dr) collides outright with
+    IAM: EntityAlreadyExists on CreateRole, discovered on this branch's first
+    real two-region apply. Set to "-dr" (or similar) for that instantiation
+    instead of trying to share/replicate the primary's role the way the
+    monitoring secrets do.
+  EOT
+  type        = string
+  default     = ""
+}
+

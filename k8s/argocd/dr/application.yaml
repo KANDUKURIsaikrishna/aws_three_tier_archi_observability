@@ -20,7 +20,7 @@ spec:
 
   source:
     repoURL: https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git
-    targetRevision: main
+    targetRevision: dr
     path: k8s/overlays/dr
     kustomize: {}
 

@@ -157,7 +157,7 @@ resource "aws_route53_record" "api" {
 # point at — don't copy today's CNAME pattern for this once secondary_alb_dns
 # is real; fix it properly then.
 resource "aws_route53_record" "secondary" {
-  count   = var.secondary_alb_dns != "" ? 1 : 0
+  count   = var.create_secondary_record ? 1 : 0
   zone_id = data.aws_route53_zone.public.zone_id
   name    = var.domain
   type    = "CNAME"

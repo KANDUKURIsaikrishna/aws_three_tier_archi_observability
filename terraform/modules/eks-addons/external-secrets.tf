@@ -25,7 +25,7 @@ data "aws_iam_policy_document" "external_secrets_trust" {
 }
 
 resource "aws_iam_role" "external_secrets" {
-  name               = "bookstore-external-secrets"
+  name               = "bookstore-external-secrets${var.role_name_suffix}"
   assume_role_policy = data.aws_iam_policy_document.external_secrets_trust.json
 }
 

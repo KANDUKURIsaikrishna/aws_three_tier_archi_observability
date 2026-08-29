@@ -174,6 +174,11 @@ module "eks_addons_dr" {
   # region as cross-region replicas — don't recreate them (name collision).
   create_monitoring_secrets = false
   replica_region            = ""
+  # IAM is account-global, not region-scoped, so the aws-lb-controller and
+  # external-secrets IAM roles below collide with the primary's (identically
+  # named) roles on CreateRole without this -- discovered on this branch's
+  # first real two-region apply. See role_name_suffix's own description.
+  role_name_suffix = "-dr"
 
   depends_on = [module.eks_dr, module.network_dr]
 }
@@ -200,7 +205,7 @@ resource "aws_security_group" "dr_replica" {
   count       = local.dr ? 1 : 0
   provider    = aws.secondary
   name        = "bookstore-dr-rds"
-  description = "DR RDS read replica — MySQL from the DR VPC only"
+  description = "DR RDS read replica - MySQL from the DR VPC only"
   vpc_id      = module.network_dr[0].vpc_id
 
   ingress {

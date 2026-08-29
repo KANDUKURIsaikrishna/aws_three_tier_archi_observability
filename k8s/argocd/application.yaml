@@ -40,7 +40,7 @@ spec:
     # layout than the one actually deployed breaks ArgoCD sync outright
     # ("unable to resolve '<branch>' to a commit SHA") if that branch
     # doesn't exist in the real repo.
-    targetRevision: main
+    targetRevision: dr
     path: k8s/overlays/prod
     kustomize: {}   # ArgoCD runs `kustomize build k8s/overlays/prod/` to render manifests
 

@@ -42,7 +42,7 @@ data "aws_iam_policy_document" "aws_lb_controller_trust" {
 }
 
 resource "aws_iam_role" "aws_lb_controller" {
-  name               = "bookstore-aws-lb-controller"
+  name               = "bookstore-aws-lb-controller${var.role_name_suffix}"
   assume_role_policy = data.aws_iam_policy_document.aws_lb_controller_trust.json
 }
 

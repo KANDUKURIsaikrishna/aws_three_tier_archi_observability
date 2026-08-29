@@ -139,8 +139,14 @@ module "route53" {
   # When the standby region is up, use its auto-discovered ALB hostname (see
   # dr-standby.tf); otherwise fall back to the manual var.
   secondary_alb_dns = var.enable_dr_standby ? local.dr_discovered_alb_dns : var.secondary_alb_dns
-  enable_cloudfront = var.enable_cloudfront
-  cloudfront_domain = try(aws_cloudfront_distribution.frontend[0].domain_name, "")
+  # Static, plan-time-known gate for the secondary record's count -- see
+  # modules/route53/variables.tf's create_secondary_record for why this can't
+  # just be `secondary_alb_dns != ""` once enable_dr_standby is in play (that
+  # value becomes unknown-until-apply, and Terraform can't resolve a
+  # resource's count from an unknown value at plan time).
+  create_secondary_record = var.enable_dr_standby || var.secondary_alb_dns != ""
+  enable_cloudfront       = var.enable_cloudfront
+  cloudfront_domain       = try(aws_cloudfront_distribution.frontend[0].domain_name, "")
 }
 
 # ── ECR ────────────────────────────────────────────────────────────────────────

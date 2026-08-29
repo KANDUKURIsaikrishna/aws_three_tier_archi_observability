@@ -37,6 +37,25 @@ variable "secondary_alb_dns" {
   default     = ""
 }
 
+variable "create_secondary_record" {
+  description = <<-EOT
+    Gates aws_route53_record.secondary's count. Deliberately separate from
+    checking secondary_alb_dns != "" directly: on a var.enable_dr_standby
+    apply, secondary_alb_dns is fed from a value only known partway through
+    THIS SAME apply (the DR ALB's discovered hostname, see dr-standby.tf's
+    dr_discovered_alb_dns) -- an unknown-until-apply string can't decide a
+    resource's count (Terraform must resolve count at plan time), so a
+    "!= \"\"" check on that value fails plan outright with "Invalid count
+    argument". The caller passes a statically-known bool instead
+    (var.enable_dr_standby || var.secondary_alb_dns != "" at the root, both
+    plain vars with no resource/data dependency) -- the record's VALUE
+    (secondary_alb_dns) can still be legitimately unknown at plan time and
+    only resolved during apply; only count needs to be plan-time-static.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "enable_cloudfront" {
   description = "When true, the primary record points at cloudfront_domain instead of primary_alb_dns."
   type        = bool

@@ -63,6 +63,40 @@ variable "enable_dr_replication" {
   default     = false
 }
 
+variable "enable_dr_standby" {
+  description = <<-EOT
+    Master switch for the full active-passive standby region (see
+    docs/DR-STANDBY-PLAN.md). When true, terraform/dr-standby.tf stands up a
+    second copy of the platform in var.secondary_region: VPC + EKS + eks-addons
+    + monitoring EC2 + a promotable RDS cross-region read replica, and turns on
+    Secrets Manager cross-region replicas for every secret the cluster reads.
+    Route53's SECONDARY failover record goes live once the DR ALB hostname is
+    discovered. Off by default -- zero extra resources, zero cost. EC2 vCPU
+    quotas are per-region, so this is NOT gated by the us-west-1 8-vCPU limit;
+    check the us-west-2 quota separately.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "dr_node_desired_size" {
+  description = "Desired node count for the standby-region EKS node group (var.enable_dr_standby). Smaller than primary by default -- a hot-standby that gets scaled up on failover (see DR-FAILOVER-RUNBOOK.md)."
+  type        = number
+  default     = 2
+}
+
+variable "dr_node_min_size" {
+  description = "Min node count for the standby-region EKS node group."
+  type        = number
+  default     = 1
+}
+
+variable "dr_node_max_size" {
+  description = "Max node count for the standby-region EKS node group."
+  type        = number
+  default     = 3
+}
+
 variable "primary_alb_dns" {
   description = "Nginx NLB DNS in primary region (us-west-1). Run: kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'. Leave empty to skip Route53 app records (first apply before EKS ready)."
   type        = string

@@ -17,6 +17,13 @@ resource "random_password" "monitoring_basic_auth" {
 resource "aws_secretsmanager_secret" "monitoring_basic_auth" {
   name                    = "/bookstore/monitoring-basic-auth"
   recovery_window_in_days = 0 # 0 = force delete on destroy, no soft-delete window — see TF-012
+
+  dynamic "replica" {
+    for_each = var.replica_region != "" ? [var.replica_region] : []
+    content {
+      region = replica.value
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "monitoring_basic_auth" {

@@ -23,3 +23,9 @@ variable "aws_region" {
   type        = string
 }
 
+variable "replica_region" {
+  description = "If non-empty, the grafana-admin and monitoring-basic-auth Secrets Manager entries get a cross-region replica here. Set by the root only when var.enable_dr_standby is on. Empty = no replica (default)."
+  type        = string
+  default     = ""
+}
+

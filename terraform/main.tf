@@ -39,8 +39,10 @@ module "rds" {
   skip_final_snapshot     = true  # avoids a lingering snapshot + naming collision on next apply
   # Empty unless explicitly opted in -- var.secondary_region alone used to be
   # enough to silently create a live cross-region secret replica on every
-  # apply, DR intent or not. See OBS-049.
-  secondary_region = var.enable_dr_replication ? var.secondary_region : ""
+  # apply, DR intent or not. See OBS-049. enable_dr_standby also needs the
+  # /bookstore/db-credentials replica so the standby cluster's ESO reads it
+  # locally.
+  secondary_region = (var.enable_dr_replication || var.enable_dr_standby) ? var.secondary_region : ""
 }
 
 # ── Per-service DB credentials ─────────────────────────────────────────────────
@@ -70,6 +72,16 @@ resource "aws_secretsmanager_secret" "db_credentials" {
   for_each                = local.db_service_credentials
   name                    = "/bookstore/${each.key}-db-credentials"
   recovery_window_in_days = 0 # 0 = force delete on destroy, matches modules/rds pattern
+
+  # Cross-region replica so the standby cluster's ESO reads secrets locally
+  # (and secret sync survives a full primary-region outage). Only when the
+  # standby region actually exists -- see var.enable_dr_standby.
+  dynamic "replica" {
+    for_each = var.enable_dr_standby ? [var.secondary_region] : []
+    content {
+      region = replica.value
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "db_credentials" {
@@ -96,6 +108,13 @@ resource "random_password" "jwt_secret" {
 resource "aws_secretsmanager_secret" "jwt_secret" {
   name                    = "/bookstore/jwt-secret"
   recovery_window_in_days = 0
+
+  dynamic "replica" {
+    for_each = var.enable_dr_standby ? [var.secondary_region] : []
+    content {
+      region = replica.value
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "jwt_secret" {
@@ -246,6 +265,13 @@ resource "aws_iam_access_key" "ses_smtp" {
 resource "aws_secretsmanager_secret" "alertmanager_smtp" {
   name                    = "/bookstore/alertmanager-smtp"
   recovery_window_in_days = 0
+
+  dynamic "replica" {
+    for_each = var.enable_dr_standby ? [var.secondary_region] : []
+    content {
+      region = replica.value
+    }
+  }
 }
 
 # No aws_secretsmanager_secret_version here on purpose -- the SMTP password
@@ -334,6 +360,10 @@ module "eks_addons" {
   oidc_provider_url = module.eks.oidc_provider_url
   aws_region        = var.aws_region
   node_role_name    = module.eks.node_role_name
+
+  # /bookstore/grafana-admin + /bookstore/monitoring-basic-auth get a replica
+  # in the standby region only when the standby stack is being built.
+  replica_region = var.enable_dr_standby ? var.secondary_region : ""
 
   # module.network explicitly, not just module.eks: nothing in eks_addons
   # references the NAT gateway's ID directly (EKS/node group reference

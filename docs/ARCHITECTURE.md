@@ -43,7 +43,12 @@ Everything above lives in one EKS cluster (`bookstore-eks`, us-west-1), split ac
 ## Region layout
 
 **Primary: us-west-1** — all live workloads (EKS, RDS, monitoring EC2, all traffic).
-**Secondary: us-west-2** — DR only. ECR image replication + RDS automated-backup replication (needs an explicit KMS key, off by default) + a Route53 failover record. **No EKS cluster in us-west-2.** If us-west-1 goes down, there's no compute to fail over to yet — DR today is backup-level, not active-active. See [`dr.tf`](../terraform/dr.tf).
+**Secondary: us-west-2** — two modes, both opt-in:
+
+- **`enable_dr_replication`** (default off) — data only: ECR image replication + RDS automated-backup replication (needs an explicit KMS key). No compute; a failover is a restore-from-backup.
+- **`enable_dr_standby`** (default off) — full active-passive standby: a second copy of the platform (VPC + EKS + eks-addons + monitoring EC2) plus a **promotable RDS cross-region read replica**, and cross-region replicas of every Secrets Manager entry the cluster reads. Route53's `SECONDARY` failover record serves automatically once the primary ALB health check fails; promoting the DB is a manual runbook step. EC2 vCPU quotas are per-region, so this is not gated by the us-west-1 8-vCPU limit. Roughly doubles running cost while enabled. Switch + secret replication are implemented; the second-region compute Terraform is the remaining build — see [`DR-STANDBY-PLAN.md`](DR-STANDBY-PLAN.md) and [`DR-FAILOVER-RUNBOOK.md`](DR-FAILOVER-RUNBOOK.md).
+
+With both flags off (the default), us-west-2 holds nothing. See [`dr.tf`](../terraform/dr.tf).
 
 ## Terraform module graph
 

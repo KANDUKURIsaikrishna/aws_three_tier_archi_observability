@@ -9,7 +9,7 @@
 #        kubectl wait -n argocd deployment/argocd-server --for=condition=Available --timeout=120s
 #
 #   2. If the repo is private, register credentials first:
-#        argocd repo add https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git \
+#        argocd repo add https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git \
 #          --username YOUR_GITHUB_USERNAME --password <github-pat>
 #
 #   3. Apply the scoped AppProject, then this manifest:
@@ -33,7 +33,7 @@ spec:
   project: bookstore   # scoped AppProject, see k8s/argocd/appproject.yaml -- apply that first
 
   source:
-    repoURL: https://github.com/YOUR_GITHUB_USERNAME/aws_three_tier_code.git
+    repoURL: https://github.com/KANDUKURIsaikrishna/aws_three_tier_archi_observability.git
     # Stamped from config.env's GITHUB_BRANCH by scripts/configure.py
     # (defaults to "main" if unset) -- keep this config-driven, not
     # hand-edited. A branch name copied over from a different repo/branch

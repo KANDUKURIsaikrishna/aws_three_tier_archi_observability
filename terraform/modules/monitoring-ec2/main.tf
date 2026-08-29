@@ -155,7 +155,7 @@ resource "aws_eks_access_policy_association" "monitoring_view" {
 # ── IAM Role ───────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "monitoring" {
-  name = "bookstore-monitoring-ec2"
+  name = "bookstore-monitoring-ec2${var.role_name_suffix}"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -192,7 +192,7 @@ resource "aws_iam_role_policy" "monitoring" {
 }
 
 resource "aws_iam_instance_profile" "monitoring" {
-  name = "bookstore-monitoring-ec2"
+  name = "bookstore-monitoring-ec2${var.role_name_suffix}"
   role = aws_iam_role.monitoring.name
 }
 

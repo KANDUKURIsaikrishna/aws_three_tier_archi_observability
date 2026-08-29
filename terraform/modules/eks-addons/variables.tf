@@ -38,7 +38,7 @@ variable "create_monitoring_secrets" {
 variable "role_name_suffix" {
   description = <<-EOT
     Appended to the aws-lb-controller and external-secrets IAM role names
-    (e.g. "bookstore-aws-lb-controller${suffix}"). Empty by default (primary
+    (e.g. "bookstore-aws-lb-controller$${suffix}"). Empty by default (primary
     region). Unlike create_monitoring_secrets/replica_region above, these two
     IAM roles have no cross-region-replica option -- IAM is account-global,
     not region-scoped, so a second same-named module.eks_addons instantiation

@@ -313,6 +313,11 @@ module "monitoring_ec2_dr" {
   alertmanager_smtp_secret_arn  = "${local.dr_secret_arn_prefix}/bookstore/alertmanager-smtp-*"
   alertmanager_smtp_secret_name = "/bookstore/alertmanager-smtp"
 
+  # IAM is account-global -- the monitoring role/instance-profile below
+  # collide with the primary's identically-named ones without this. See
+  # modules/monitoring-ec2/variables.tf's role_name_suffix.
+  role_name_suffix = "-dr"
+
   depends_on = [module.eks_dr, module.eks_addons_dr]
 }
 

@@ -142,27 +142,38 @@ resource "aws_route53_record" "api" {
   }
 }
 
-# Still CNAME, not ALIAS — genuinely fine for now, NOT a bug: this record only
-# ever gets created once var.secondary_alb_dns is non-empty (count below), and
-# that only happens once a secondary-region EKS cluster + ingress LB actually
-# exist, which they don't yet (see ARCHITECTURE.md — DR is backup-level only
-# today). When that day comes, this needs the SAME apex-alias treatment as
-# `primary` above, but pointed at the secondary region's LB hosted zone ID —
-# region-specific and NOT the same value as data.aws_lb_hosted_zone_id.ingress_lb
-# above (that one resolves against var.aws_region, the primary region, via
-# this module's default provider — and confirm the secondary cluster's ingress
-# is the same LB type, ALB, before reusing this pattern; don't assume it).
-# Wiring a second, secondary-region-scoped provider through this module is
-# real work, deliberately deferred until there's an actual secondary LB to
-# point at — don't copy today's CNAME pattern for this once secondary_alb_dns
-# is real; fix it properly then.
+# ALIAS, not CNAME — a plain CNAME at the zone apex (var.domain itself, no
+# subdomain) is rejected outright by Route53 ("RRSet of type CNAME ... is not
+# permitted at apex in zone"), the same DNS-spec rule (RFC 1035: the apex
+# needs NS/SOA records, which can't coexist with a CNAME) `primary` above
+# already works around via ALIAS. This resource used to be CNAME, marked
+# "fine for now, NOT a bug" on the theory that it could never actually apply
+# until a real secondary-region LB existed — var.enable_dr_standby (and this
+# module's create_secondary_record gate) made that day arrive, and confirmed
+# live on the first real two-region apply: the apex-CNAME rejection above is
+# the exact error AWS returned.
+#
+# aws_lb_hosted_zone_id is region-specific (each AWS region has its own
+# constant) — needs the SECONDARY region's value, not data.aws_lb_hosted_zone_id
+# above (that one resolves against this module's default provider, i.e.
+# var.aws_region, the PRIMARY region). Hence the aws.secondary provider alias
+# below (see versions.tf) instead of reusing the data source above.
+data "aws_lb_hosted_zone_id" "ingress_lb_secondary" {
+  provider           = aws.secondary
+  load_balancer_type = "application"
+}
+
 resource "aws_route53_record" "secondary" {
   count   = var.create_secondary_record ? 1 : 0
   zone_id = data.aws_route53_zone.public.zone_id
   name    = var.domain
-  type    = "CNAME"
-  ttl     = 60
-  records = [var.secondary_alb_dns]
+  type    = "A"
+
+  alias {
+    name                   = var.secondary_alb_dns
+    zone_id                = data.aws_lb_hosted_zone_id.ingress_lb_secondary.id
+    evaluate_target_health = true
+  }
 
   failover_routing_policy { type = "SECONDARY" }
   set_identifier = "secondary"

@@ -128,7 +128,13 @@ resource "aws_secretsmanager_secret_version" "jwt_secret" {
 # Private zone for in-cluster RDS DNS + public zone with active-passive failover.
 
 module "route53" {
-  source       = "./modules/route53"
+  source = "./modules/route53"
+  # aws.secondary needed for the `secondary` failover record's ALB alias
+  # (region-specific hosted zone ID) -- see modules/route53/versions.tf.
+  # Always wired, not gated on enable_dr_standby: the aws.secondary provider
+  # itself is always configured (providers.tf), so passing it costs nothing
+  # when DR is off, and Terraform provider blocks can't be conditional anyway.
+  providers    = { aws = aws, aws.secondary = aws.secondary }
   vpc_id       = module.network.vpc_id
   rds_endpoint = module.rds.rds_endpoint
   domain       = var.domain

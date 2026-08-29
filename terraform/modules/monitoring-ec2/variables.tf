@@ -86,3 +86,19 @@ variable "instance_type" {
   type        = string
   default     = "t3.small"
 }
+
+variable "role_name_suffix" {
+  description = <<-EOT
+    Appended to the aws_iam_role.monitoring and aws_iam_instance_profile.monitoring
+    names (e.g. "bookstore-monitoring-ec2$${suffix}"). Empty by default (primary
+    region). IAM is account-global, not region-scoped -- var.enable_dr_standby's
+    module.monitoring_ec2_dr instantiating this module a second time collides
+    outright on both the role AND the instance profile (both IAM resources)
+    without this, discovered on the dr branch's first real two-region apply
+    (same class of bug as modules/eks-addons's own role_name_suffix, and the
+    same fix). Everything else in this module (SG name, key pair name) is
+    region-scoped, not global, and needs no suffix.
+  EOT
+  type        = string
+  default     = ""
+}

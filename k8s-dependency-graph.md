@@ -34,7 +34,7 @@ flowchart TD
     ASVC --> OVS["kustomize build k8s/services/&lt;svc&gt;/overlays/prod<br/>= ../../base + images: patch (CI-stamped)"]
     OVS --> NSS["namespace: &lt;svc&gt;  (catalog | user | order | notification | gateway)<br/>ConfigMap · ExternalSecret ×2 · schema-init Job* · Deployment · Service<br/>HPA · PDB · NetworkPolicy   (*api-gateway has Ingress instead of a Job)"]
 
-    EXCL["k8s/base/monitoring/servicemonitor.yaml + prometheus-rules.yaml<br/>NOT in any kustomization — unknown CRD would fail the whole sync batch"]
+    EXCL["k8s/base/monitoring/ — REMOVED 2026-08-29<br/>(ServiceMonitor/PrometheusRule: no Prometheus Operator;<br/>an unknown CRD fails the whole sync batch — don't re-add)"]
 
     classDef off fill:#f0f0f0,stroke:#999,stroke-dasharray:4 3,color:#666;
     class EXCL off;
@@ -50,10 +50,11 @@ flowchart TD
 - Each overlay is thin: `resources: [../../base]` plus an `images:` block that
   **CI rewrites** every deploy (`kustomize edit set image …` on the
   *overlay*, never the base).
-- `k8s/base/monitoring/*` is deliberately excluded from `base/kustomization.yaml`
-  — `ServiceMonitor`/`PrometheusRule` are `monitoring.coreos.com` CRDs with no
-  Prometheus Operator to register them, and an unknown resource type fails the
-  **entire** Application sync, not just those two objects (OBS-012).
+- `k8s/base/monitoring/` (`ServiceMonitor`/`PrometheusRule`) was **removed
+  2026-08-29** (`cdbd5cc`) — `monitoring.coreos.com` CRDs with no Prometheus
+  Operator to register them, and an unknown resource type fails the **entire**
+  Application sync, not just those two objects (OBS-012). The
+  `base/kustomization.yaml` comment says don't reintroduce them.
 
 ---
 
@@ -193,10 +194,11 @@ external traffic and the ALB takes minutes to come up.
 ## Places the file layout lies about order
 
 1. **An unknown CRD fails the whole batch, not just itself.** `ServiceMonitor`
-   / `PrometheusRule` under `k8s/base/monitoring/` look like normal manifests;
-   including them in `base/kustomization.yaml` breaks *every* resource in the
-   `bookstore` Application's sync (OBS-012). They're left on disk, out of the
-   kustomization, on purpose.
+   / `PrometheusRule` under `k8s/base/monitoring/` were never in
+   `base/kustomization.yaml` — including even one would break *every* resource
+   in the `bookstore` Application's sync (OBS-012). The files themselves were
+   deleted 2026-08-29 (`cdbd5cc`); the `base/kustomization.yaml` comment
+   records why not to bring them back.
 
 2. **`ClusterSecretStore` sits in `k8s/base/secrets/external-secret.yaml` next
    to nothing that depends on it visually — but it's wave −2 and a PreSync

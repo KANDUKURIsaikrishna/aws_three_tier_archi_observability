@@ -115,7 +115,7 @@ Creates the public Route53 hosted zone for `DOMAIN` (from `config.env`) if it do
 ```bash
 cd terraform
 terraform plan -out=tfplan
-# review it — expect ~140 resources on a genuinely fresh account:
+# review it — expect ~145 resources on a genuinely fresh account:
 #   VPC + subnets + NAT + IGW + S3 endpoint, security groups, 2 ACM certs
 #   (CloudFront's, off by default, + the real one the ALB uses), RDS instance,
 #   private Route53 zone (the public zone is looked up, not created — see Step 3),

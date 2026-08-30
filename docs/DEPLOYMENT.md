@@ -117,7 +117,7 @@ Creates the public Route53 hosted zone for `DOMAIN` (from `config.env`) if it do
 ```bash
 cd terraform
 terraform plan -out=tfplan
-# review it — expect ~140 resources on a genuinely fresh account:
+# review it — expect ~145 resources on a genuinely fresh account:
 #   VPC + subnets + NAT + IGW + S3 endpoint, security groups, 2 ACM certs
 #   (CloudFront's, off by default, + the real one the ALB uses), RDS instance,
 #   private Route53 zone (the public zone is looked up, not created — see Step 3),
@@ -154,7 +154,7 @@ make dr-apply     # terraform apply -var enable_dr_standby=true -parallelism=20 
 
 Pass `-var enable_dr_standby=true` on the CLI (what `make dr-*` does), never by hand-editing `terraform.tfvars` — `scripts/configure.py` fully regenerates that file on every run and doesn't know this variable exists, so a manually-appended line there silently vanishes the next time `configure.py` runs.
 
-Expect roughly double the resource count (~225 vs. the single-region ~140) and check `us-west-2`'s own EC2 vCPU quota separately (`aws service-quotas get-service-quota --region us-west-2 --service-code ec2 --quota-code L-1216C47A`) — it's a per-region limit, not shared with `us-west-1`'s.
+Expect roughly double the resource count (~225 vs. the single-region ~145) and check `us-west-2`'s own EC2 vCPU quota separately (`aws service-quotas get-service-quota --region us-west-2 --service-code ec2 --quota-code L-1216C47A`) — it's a per-region limit, not shared with `us-west-1`'s.
 
 Verified live 2026-08-29, both regions applied and ArgoCD-synced cleanly, primary+secondary Route53 failover records both correct — see `DR-STANDBY-PLAN.md`'s bug table for the 5 issues that first real run surfaced and fixed. One confirmed, still-open gap: CI's `deploy` job only updates `k8s/overlays/prod`'s image tags, never `overlays/dr`'s, so a `dr` push never actually reaches the standby cluster's running images.
 

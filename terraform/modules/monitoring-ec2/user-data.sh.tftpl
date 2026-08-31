@@ -208,13 +208,24 @@ echo "*/5 * * * * root /usr/local/bin/update-prom-targets.sh" > /etc/cron.d/prom
 # so the password can't be interpolated inline there the way alertmanager.yml
 # does with $SMTP_* above -- a separate file sidesteps that entirely).
 echo "$MONITORING_BASIC_AUTH_PASSWORD" > /opt/monitoring/prometheus/basic-auth-password
-chmod 600 /opt/monitoring/prometheus/basic-auth-password
+# 644, not 600: this file is bind-mounted into the Prometheus container, which
+# runs as non-root (nobody). Prometheus needs to read it both for its own
+# self-scrape auth AND to attach the Authorization header on every alert POST
+# to Alertmanager -- with 600/root-owned it got "permission denied", the
+# self-scrape target sat DOWN, and NO alert ever reached Alertmanager, so no
+# notification email ever sent (OBS-071). The value is the monitoring
+# basic-auth password, already in Secrets Manager and needed to hit any
+# monitoring URL; on this single-tenant private box, host-readable is fine.
+chmod 644 /opt/monitoring/prometheus/basic-auth-password
 
 # ── Prometheus config ─────────────────────────────────────────────────────────
 cat > /opt/monitoring/prometheus/prometheus.yml << 'PROM_EOF'
 global:
-  scrape_interval: 30s
-  evaluation_interval: 30s
+  # 10s (not the usual 30-60s) so a load test shows up in rate() windows and
+  # trips the demo alerts within ~2 min of load start instead of ~4-5 min.
+  # Fine for this single-node Prometheus scraping ~20 targets.
+  scrape_interval: 10s
+  evaluation_interval: 10s
 
 alerting:
   alertmanagers:
@@ -347,13 +358,14 @@ groups:
 
       # Real per-pod usage (kubelet cAdvisor, see OBS-044) -- catches a
       # single runaway pod, not just whole-node pressure like HighCPUUsage
-      # above. `for: 1m` deliberately short (vs. 10m on the node-level
-      # alerts) so this is demo-friendly: a short CPU-stress pod trips it
-      # within a couple of scrape cycles instead of requiring a sustained
-      # 10-minute load.
+      # above. These three (HighPodCPUUsage / HighRequestRate / HighErrorRate)
+      # are the demo alerts scripts/simulate_load.py drives: 1m rate windows
+      # and short `for:` holds (vs. 5-10m on the real node-level alerts), so
+      # with the 10s scrape_interval above a load test trips them ~90-120s
+      # after load start, and the email lands ~10s later.
       - alert: HighPodCPUUsage
-        expr: sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[2m])) > 0.3
-        for: 1m
+        expr: sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{container!="", container!="POD"}[1m])) > 0.3
+        for: 20s
         labels:
           severity: warning
         annotations:
@@ -361,7 +373,7 @@ groups:
 
       - alert: HighPodMemoryUsage
         expr: sum by (namespace, pod) (container_memory_working_set_bytes{container!="", container!="POD"}) > 200 * 1024 * 1024
-        for: 2m
+        for: 1m
         labels:
           severity: warning
         annotations:
@@ -372,8 +384,8 @@ groups:
       # on purpose -- this app has near-zero idle traffic, so a modest load
       # test trips it fast without risking a false-positive at rest.
       - alert: HighRequestRate
-        expr: sum by (service) (rate(http_requests_total[2m])) > 3
-        for: 1m
+        expr: sum by (service) (rate(http_requests_total[1m])) > 3
+        for: 20s
         labels:
           severity: warning
         annotations:
@@ -381,8 +393,8 @@ groups:
 
       - alert: HighErrorRate
         expr: |
-          sum(rate(http_requests_total{status=~"5.."}[2m])) / sum(rate(http_requests_total[2m])) > 0.05
-        for: 2m
+          sum(rate(http_requests_total{status=~"5.."}[1m])) / sum(rate(http_requests_total[1m])) > 0.05
+        for: 30s
         labels:
           severity: critical
         annotations:
@@ -408,7 +420,10 @@ global:
 route:
   receiver: 'default-webhook'
   group_by: ['alertname', 'severity', 'cluster']
-  group_wait: 30s
+  # 10s (default is 30s) -- first notification for a new alert group goes out
+  # almost as soon as Prometheus fires it, so the demo email isn't held back
+  # half a minute after the alert already shows in the UI.
+  group_wait: 10s
   group_interval: 5m
   repeat_interval: 12h
   routes:

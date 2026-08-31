@@ -13,12 +13,33 @@ and makes `aws secretsmanager get-secret-value` fail with a confusing
 "Invalid name" error. subprocess.run() here calls `aws.exe` directly,
 bypassing bash entirely, so that conversion never happens.
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TERRAFORM_DIR = REPO_ROOT / "terraform"
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _first_useful_line(stderr: str) -> str:
+    """Terraform/aws error output is wrapped in ANSI colour and box-drawing
+    characters -- picking `.splitlines()[-1]` lands on a bare '╵'. Strip the
+    decoration and return the first line that actually says something,
+    preferring the one that starts with 'Error:'."""
+    lines = []
+    for raw in stderr.splitlines():
+        clean = _ANSI.sub("", raw).strip().strip("│╷╵").strip()
+        if clean:
+            lines.append(clean)
+    if not lines:
+        return "unknown error"
+    for line in lines:
+        if line.lower().startswith("error"):
+            return line[:120]
+    return lines[0][:120]
 
 
 def load_region() -> str:
@@ -37,7 +58,10 @@ def terraform_output(name: str) -> str:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return f"<unavailable: {result.stderr.strip().splitlines()[-1] if result.stderr else 'unknown error'}>"
+        hint = _first_useful_line(result.stderr)
+        if "Backend initialization" in result.stderr or "please run \"terraform init\"" in result.stderr:
+            hint = "run: python3 scripts/init_backend.py"
+        return f"<unavailable: {hint}>"
     return result.stdout.strip()
 
 
@@ -49,7 +73,7 @@ def secret_value(secret_id: str, region: str) -> str:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return f"<unavailable: {result.stderr.strip().splitlines()[-1] if result.stderr else 'unknown error'}>"
+        return f"<unavailable: {_first_useful_line(result.stderr)}>"
     return result.stdout.strip()
 
 
@@ -59,6 +83,7 @@ def main():
     grafana_url = terraform_output("grafana_url")
     prometheus_url = terraform_output("prometheus_url")
     alertmanager_url = terraform_output("alertmanager_url")
+    loki_url = terraform_output("loki_url")
 
     grafana_password = secret_value("/bookstore/grafana-admin", region)
     monitoring_password = secret_value("/bookstore/monitoring-basic-auth", region)
@@ -67,6 +92,7 @@ def main():
         ("Grafana", grafana_url, "admin", grafana_password),
         ("Prometheus", prometheus_url, "admin", monitoring_password),
         ("Alertmanager", alertmanager_url, "admin", monitoring_password),
+        ("Loki", loki_url, "-", "(no auth - same box)"),
     ]
 
     name_w = max(len(r[0]) for r in rows)

@@ -13,4 +13,4 @@ resources:
 images:
 - name: bookstore-frontend
   newName: 595028889753.dkr.ecr.us-west-1.amazonaws.com/bookstore-frontend
-  newTag: 14ed040d
+  newTag: d381890c

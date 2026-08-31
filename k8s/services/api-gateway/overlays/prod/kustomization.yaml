@@ -12,4 +12,4 @@ resources:
 images:
 - name: bookstore-api-gateway
   newName: 595028889753.dkr.ecr.us-west-1.amazonaws.com/bookstore-api-gateway
-  newTag: 14ed040d
+  newTag: d381890c

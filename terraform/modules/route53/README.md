@@ -39,6 +39,6 @@ No requirements.
 
 | Name | Description |
 | ---- | ----------- |
-| <a name="output_public_name_servers"></a> [public\_name\_servers](#output\_public\_name\_servers) | NS records already set at your domain registrar by scripts/init-domain.sh — informational only |
-| <a name="output_public_zone_id"></a> [public\_zone\_id](#output\_public\_zone\_id) | Route53 public hosted zone ID — created once via scripts/init-domain.sh, looked up here |
+| <a name="output_public_name_servers"></a> [public\_name\_servers](#output\_public\_name\_servers) | NS records already set at your domain registrar by scripts/init_domain.py — informational only |
+| <a name="output_public_zone_id"></a> [public\_zone\_id](#output\_public\_zone\_id) | Route53 public hosted zone ID — created once via scripts/init_domain.py, looked up here |
 <!-- END_TF_DOCS -->

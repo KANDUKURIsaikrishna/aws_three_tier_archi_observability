@@ -206,10 +206,10 @@ npm run build      # production build → build/
 
 ```bash
 # Usage
-./scripts/build-and-push.sh <AWS_ACCOUNT_ID> <AWS_REGION> <IMAGE_TAG> [REACT_APP_API_URL]
+python3 scripts/build_and_push.py <AWS_ACCOUNT_ID> <AWS_REGION> <IMAGE_TAG> [REACT_APP_API_URL]
 
 # Example
-./scripts/build-and-push.sh 123456789012 us-west-1 v1.2.0 https://api.bookstore.your-domain.com
+python3 scripts/build_and_push.py 123456789012 us-west-1 v1.2.0 https://api.bookstore.your-domain.com
 ```
 
 > The CI/CD pipeline performs these steps automatically on every merge to `main`. Manual use of this script is for hotfixes or pre-release testing only.

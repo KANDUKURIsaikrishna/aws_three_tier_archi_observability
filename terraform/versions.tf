@@ -40,7 +40,7 @@ terraform {
     }
   }
 
-  # Run scripts/init-backend.sh once to create the S3 bucket. Fill in the
+  # Run scripts/init_backend.py once to create the S3 bucket. Fill in the
   # values below, then: terraform init -migrate-state
   #
   # use_lockfile enables S3's native state locking (conditional writes --
@@ -60,7 +60,7 @@ terraform {
   # cluster named "bookstore-eks" in the same account) is not solved by
   # this alone.
   #
-  # bucket and region are intentionally left empty here -- scripts/init-backend.sh
+  # bucket and region are intentionally left empty here -- scripts/init_backend.py
   # patches both in place with your real account's bucket name and config.env's
   # AWS_REGION before the first `terraform init`. Terraform backend blocks can't
   # reference variables at all (resolved before any variables are evaluated, a

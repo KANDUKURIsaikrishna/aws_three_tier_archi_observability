@@ -24,7 +24,7 @@ resource "aws_route53_record" "rds_endpoint" {
 # BRAND NEW nameservers on every `terraform destroy` + fresh `apply`,
 # breaking the registrar delegation every single cycle and forcing that
 # manual step to be redone each time (see TROUBLESHOOTING.md OBS-058).
-# Run `scripts/init-domain.sh` once per domain, ever, to create this zone
+# Run `scripts/init_domain.py` once per domain, ever, to create this zone
 # and do the registrar handoff — after that, every apply/destroy cycle just
 # reads it here and never touches it.
 data "aws_route53_zone" "public" {

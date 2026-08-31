@@ -85,7 +85,7 @@ git push
 ## Step 2 — Bootstrap Terraform state (once per AWS account)
 
 ```bash
-./scripts/init-backend.sh
+python3 scripts/init_backend.py
 ```
 
 Creates the S3 bucket, patches `versions.tf` in place with the real bucket name *and region*, runs `terraform init`. State locking is native S3 conditional-write locking (`use_lockfile = true`, no DynamoDB table).
@@ -94,7 +94,7 @@ Creates the S3 bucket, patches `versions.tf` in place with the real bucket name 
 
 Region resolution here is layered, in priority order:
 
-1. An explicit CLI arg (`./scripts/init-backend.sh us-west-2`, if you want to override)
+1. An explicit CLI arg (`python3 scripts/init_backend.py us-west-2`, if you want to override)
 2. `AWS_REGION` from `config.env` (the normal path, since Step 1 already created it)
 3. `us-west-1` as a last-resort default if neither is set
 
@@ -103,7 +103,7 @@ The Terraform backend block in `versions.tf` genuinely cannot reference `var.aws
 ## Step 3 — Bootstrap the domain (once per domain, ever)
 
 ```bash
-./scripts/init-domain.sh
+python3 scripts/init_domain.py
 ```
 
 Creates the public Route53 hosted zone for `DOMAIN` (from `config.env`) if it doesn't already exist, and prints the 4 NS values to set at your registrar (GoDaddy, Namecheap, etc.).
@@ -159,7 +159,7 @@ In GitHub: **Settings → Secrets and variables → Actions**.
 
 ## Step 6 — Import known-conflicting entries (if re-deploying)
 
-Only needed if this isn't a truly fresh account — a lost or switched Terraform state backend (e.g. pointing `init-backend.sh` at a different S3 bucket than a previous session used) can leave entries in AWS that the *current* state doesn't know about, even though a real `terraform destroy` against the *correct* state cleans all of them up properly: three Secrets Manager secrets (`/bookstore/db-credentials`, `/bookstore/grafana-admin`, `/bookstore/jwt-secret`) plus the SES email identity for `ALERT_EMAIL`. Confirmed live 2026-08-26 against an account with two different state buckets from past testing — an apply against the "wrong" one hit `AlreadyExistsException` on `aws_sesv2_email_identity.alerts`:
+Only needed if this isn't a truly fresh account — a lost or switched Terraform state backend (e.g. pointing `init_backend.py` at a different S3 bucket than a previous session used) can leave entries in AWS that the *current* state doesn't know about, even though a real `terraform destroy` against the *correct* state cleans all of them up properly: three Secrets Manager secrets (`/bookstore/db-credentials`, `/bookstore/grafana-admin`, `/bookstore/jwt-secret`) plus the SES email identity for `ALERT_EMAIL`. Confirmed live 2026-08-26 against an account with two different state buckets from past testing — an apply against the "wrong" one hit `AlreadyExistsException` on `aws_sesv2_email_identity.alerts`:
 
 ```bash
 make import

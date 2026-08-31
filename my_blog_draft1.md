@@ -375,13 +375,13 @@ Runs first: every later step depends on the `terraform.tfvars` this generates. I
 
 **2. Bootstrap Terraform's remote state.**
 ```bash
-./scripts/init-backend.sh
+python3 scripts/init_backend.py
 ```
 Reads the region from `config.env`. Creates the state bucket and runs `terraform init`  has to exist before Terraform can track anything else.
 
 **3. Bootstrap the domain.**
 ```bash
-./scripts/init-domain.sh
+python3 scripts/init_domain.py
 ```
 Creates the Route53 hosted zone and prints the nameserver values for your registrar. Done here, not after the apply  DNS propagation takes time, and starting it now lets that time overlap with the RDS/EKS provisioning in the next step instead of adding to it.
 

@@ -71,12 +71,12 @@ output "github_oidc_role_arn" {
 }
 
 output "route53_public_zone_id" {
-  description = "Route53 public hosted zone ID — created once via scripts/init-domain.sh, looked up here"
+  description = "Route53 public hosted zone ID — created once via scripts/init_domain.py, looked up here"
   value       = module.route53.public_zone_id
 }
 
 output "route53_public_name_servers" {
-  description = "NS records already set at your domain registrar by scripts/init-domain.sh — informational only"
+  description = "NS records already set at your domain registrar by scripts/init_domain.py — informational only"
   value       = module.route53.public_name_servers
 }
 

@@ -10,4 +10,4 @@ data:
   ORDER_SERVICE_URL: "http://order-service.order.svc.cluster.local"
   # The only origin the gateway's CORS policy allows -- substituted by
   # scripts/configure.py the same way k8s/base/ingress/ingress.yaml's host is.
-  FRONTEND_URL: "https://bookstore.YOUR_DOMAIN_HERE.com"
+  FRONTEND_URL: "https://bookstore.b17catsvsdogs.xyz"

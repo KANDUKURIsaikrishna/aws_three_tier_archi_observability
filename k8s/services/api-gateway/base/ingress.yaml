@@ -24,9 +24,9 @@ spec:
   ingressClassName: alb
   tls:
     - hosts:
-        - api.bookstore.YOUR_DOMAIN_HERE.com
+        - api.bookstore.b17catsvsdogs.xyz
   rules:
-    - host: api.bookstore.YOUR_DOMAIN_HERE.com
+    - host: api.bookstore.b17catsvsdogs.xyz
       http:
         paths:
           - path: /

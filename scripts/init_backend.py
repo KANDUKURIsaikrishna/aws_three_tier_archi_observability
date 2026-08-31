@@ -14,10 +14,12 @@ What it does:
 
 Region resolution, in priority order:
   1. An explicit CLI arg: python3 scripts/init_backend.py us-west-2
-  2. AWS_REGION from config.env, if config.env exists (same file
-     scripts/configure.py reads -- run this AFTER filling in config.env so
-     the backend's region and terraform.tfvars' region can't drift apart)
-  3. us-west-1, if neither of the above is set
+  2. AWS_REGION from config.env, if config.env exists (the normal path --
+     same file scripts/configure.py reads; run this AFTER filling in
+     config.env so the backend's region and terraform.tfvars' region can't
+     drift apart)
+  3. `aws configure get region` (whatever the AWS CLI itself is set to)
+  Nothing is hardcoded -- if none of the three yields a region, it errors.
 
 Pure Python 3 stdlib + the `aws` and `terraform` CLIs on PATH -- identical
 behaviour on Windows, macOS and Linux (no shell, no sed, no mktemp).
@@ -71,6 +73,16 @@ def read_config_region() -> str:
         if line.startswith("AWS_REGION="):
             region = line.partition("=")[2].strip().strip('"').strip("'")
     return region
+
+
+def aws_cli_region(aws: str) -> str:
+    """Whatever `aws configure get region` reports (profile / AWS_REGION /
+    AWS_DEFAULT_REGION) -- the last resort, still not a hardcoded literal."""
+    proc = subprocess.run(
+        [aws, "configure", "get", "region"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    )
+    return proc.stdout.strip()
 
 
 def bucket_exists(aws: str, bucket: str, region: str) -> bool:
@@ -154,7 +166,14 @@ def main() -> None:
     aws = tool("aws")
     terraform = tool("terraform")
 
-    region = (sys.argv[1] if len(sys.argv) > 1 else "") or read_config_region() or "us-west-1"
+    region = (
+        (sys.argv[1] if len(sys.argv) > 1 else "")
+        or read_config_region()
+        or aws_cli_region(aws)
+    )
+    if not region:
+        die("No region: pass one as an arg, set AWS_REGION in config.env, or "
+            "`aws configure set region <region>`.")
     account_id = capture(
         [aws, "sts", "get-caller-identity", "--query", "Account", "--output", "text"]
     )

@@ -205,11 +205,15 @@ npm run build      # production build → build/
 ## Building and Pushing Docker Images
 
 ```bash
-# Usage
-python3 scripts/build_and_push.py <AWS_ACCOUNT_ID> <AWS_REGION> <IMAGE_TAG> [REACT_APP_API_URL]
+# Usage -- account ID, region and API URL are read from config.env
+python3 scripts/build_and_push.py <IMAGE_TAG>
 
 # Example
-python3 scripts/build_and_push.py 123456789012 us-west-1 v1.2.0 https://api.bookstore.your-domain.com
+python3 scripts/build_and_push.py v1.2.0
+
+# Override any of them for a one-off
+python3 scripts/build_and_push.py v1.2.0 --account-id 123456789012 --region us-west-1 \
+  --api-url https://api.bookstore.your-domain.com
 ```
 
 > The CI/CD pipeline performs these steps automatically on every merge to `main`. Manual use of this script is for hotfixes or pre-release testing only.

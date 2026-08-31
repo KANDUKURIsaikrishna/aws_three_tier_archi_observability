@@ -43,13 +43,27 @@ def _first_useful_line(stderr: str) -> str:
 
 
 def load_region() -> str:
+    """AWS_REGION from config.env, else whatever the AWS CLI itself is set to
+    (`aws configure get region` -- profile / AWS_REGION / AWS_DEFAULT_REGION).
+    No hardcoded literal; errors if neither yields anything."""
     config_path = REPO_ROOT / "config.env"
     if config_path.exists():
         for raw in config_path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
             if line.startswith("AWS_REGION="):
-                return line.partition("=")[2].strip().strip('"').strip("'")
-    return "us-west-1"
+                val = line.partition("=")[2].strip().strip('"').strip("'")
+                if val:
+                    return val
+    proc = subprocess.run(
+        ["aws", "configure", "get", "region"],
+        capture_output=True, text=True,
+    )
+    region = proc.stdout.strip()
+    if region:
+        return region
+    print("error: no region -- set AWS_REGION in config.env or "
+          "`aws configure set region <region>`.", file=sys.stderr)
+    sys.exit(1)
 
 
 def terraform_output(name: str) -> str:

@@ -11,4 +11,4 @@ resources:
 images:
 - name: bookstore-notification-service
   newName: 595028889753.dkr.ecr.us-west-1.amazonaws.com/bookstore-notification-service
-  newTag: 83dcfbc9
+  newTag: 14ed040d

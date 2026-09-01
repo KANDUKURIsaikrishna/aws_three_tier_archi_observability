@@ -133,10 +133,10 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 │   ├── overlays/dev/ , overlays/prod/
 │   └── argocd/                  # ArgoCD Application manifests
 │
-├── scripts/                     # build-and-push, init-backend, init-domain, configure.py, simulate-load,
-│                                 #   monitoring_credentials, and the local-exec helpers Terraform invokes
-│                                 #   (derive_ses_smtp_password, wait_for_alb_hostname, cleanup_eks_networking,
-│                                 #   delete_ingress_objects)
+├── scripts/                     # all Python 3, stdlib only. preflight, configure, init_backend,
+│                                 #   init_domain, build_and_push, simulate_load, monitoring_credentials,
+│                                 #   and the local-exec helpers Terraform invokes (derive_ses_smtp_password,
+│                                 #   wait_for_alb_hostname, cleanup_eks_networking, delete_ingress_objects)
 ├── docs/                        # ARCHITECTURE.md, DEPLOYMENT.md, UML.md
 └── .github/workflows/           # ci-cd.yml, terraform.yml, terraform-drift.yml
 ```
@@ -149,11 +149,18 @@ Everything runs in one EKS cluster (`bookstore-eks`, `us-west-1`), split across 
 |---|---|---|
 | Node.js | 18 | Local service/frontend development |
 | Docker | 24 | Building images |
-| Terraform | 1.7 | Provisioning AWS infrastructure |
-| AWS CLI | 2.x | ECR login, EKS kubeconfig |
-| kubectl | 1.31 | Deploying k8s manifests |
+| Terraform | 1.10.0 | Provisioning AWS infrastructure (native S3 state locking) |
+| AWS CLI | 2.x | ECR login, EKS kubeconfig, `local-exec` scripts |
+| kubectl | 1.31 | Deploying k8s manifests, `local-exec` scripts |
+| Python | 3.8 | Every `local-exec` provisioner + all `scripts/*.py` |
 | helm | 3.x | Querying cluster add-ons (installed by Terraform) |
 | kustomize | 5.x | Building manifests locally |
+
+Run `python3 scripts/preflight.py` to verify `terraform` / `kubectl` / `aws` /
+`python3` are on `PATH` and new enough, that AWS credentials resolve, and that
+`config.env` is filled in. `make plan` and `make apply` run it automatically —
+a missing or old tool fails there with a clear message instead of deep inside
+a `terraform apply`.
 
 ---
 

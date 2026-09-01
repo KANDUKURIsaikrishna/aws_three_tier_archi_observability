@@ -1,4 +1,4 @@
-.PHONY: init import plan apply destroy monitoring-status monitoring-logs monitoring-key
+.PHONY: preflight init import plan apply destroy monitoring-status monitoring-logs monitoring-key
 
 TF_DIR = terraform
 
@@ -8,6 +8,12 @@ TF_DIR = terraform
 ALERT_EMAIL = $(shell grep -E '^ALERT_EMAIL=' config.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"'"'"' \r')
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
+
+# Toolchain check -- terraform/kubectl/aws/python3 versions + PATH, AWS creds,
+# config.env. Report only, no installs. `plan` and `apply` depend on it so a
+# missing/old tool fails here instead of deep inside an apply's local-exec.
+preflight:
+	python3 scripts/preflight.py
 
 init:
 	terraform -chdir=$(TF_DIR) init
@@ -49,11 +55,11 @@ import:
 	  aws_sesv2_email_identity.alerts \
 	  $(ALERT_EMAIL) 2>/dev/null || echo "SES email identity already in state (or ALERT_EMAIL not set)"
 
-plan: init
+plan: preflight init
 	terraform -chdir=$(TF_DIR) plan
 
-# Full automated deploy: init → import known conflicts → apply
-apply: init import
+# Full automated deploy: preflight → init → import known conflicts → apply
+apply: preflight init import
 	terraform -chdir=$(TF_DIR) apply -auto-approve
 
 destroy:

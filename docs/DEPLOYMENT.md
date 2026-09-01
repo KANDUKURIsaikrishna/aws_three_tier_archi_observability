@@ -29,6 +29,14 @@ How to actually stand this project up, end to end, from a fresh AWS account. Thi
   > Every `local-exec` provisioner in this Terraform config invokes `python3` directly (`interpreter = ["python3"]`, not a shell) to run a real script from `scripts/` — ALB hostname discovery, SES SMTP password derivation, destroy-time Ingress/flow-log-group cleanup — so it behaves identically on Windows, macOS, and Linux instead of assuming a bash-compatible shell exists. `helm` itself isn't needed on your machine — the `helm` Terraform provider talks to the Helm API directly, no CLI required.
 - A domain you control (for `terraform.tfvars`' `domain` value — ACM DNS validation needs it).
 
+**Check the toolchain first:**
+
+```bash
+python3 scripts/preflight.py
+```
+
+Verifies all four tools are on `PATH` and new enough (`terraform` >= 1.10.0), that `aws sts get-caller-identity` works, and that `config.env` has its 5 required keys. Report only — it never installs anything or touches `PATH`; on a failure it prints the install command for your OS and exits non-zero. `make plan` and `make apply` run it automatically as a prerequisite, so a missing or old tool fails here with a clear message instead of deep inside an apply (usually `null_resource.wait_for_alb_hostname`).
+
 **One-time GitHub OIDC provider** (not a Terraform resource — `iam.tf`'s trust policy just references its ARN by string, so Terraform never checks it exists):
 
 ```bash

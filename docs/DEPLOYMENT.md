@@ -144,6 +144,18 @@ RDS (~10-15 min) and EKS (~15-20 min) are the slow parts and provision concurren
 
 Nothing in `.github/workflows/` works until these exist — every push fails predictably at the AWS-auth step otherwise, on a genuinely fresh repo. `AWS_ROLE_ARN` names the `aws_iam_role.github_oidc` role Step 4's apply just created (using *your own* local AWS CLI credentials — CI has no way to bootstrap that role itself, since it needs the role to authenticate in the first place). The OIDC identity provider that role's trust policy points at is already in place too, from **Before you start**. From here on, every CI-driven apply uses OIDC — no static AWS keys ever touch GitHub.
 
+### Setting up SonarCloud (once, per fork/account)
+
+`.github/workflows/ci-cd.yml`'s `test` job runs `SonarSource/sonarqube-scan-action`, feeding it the 6 services' `lcov.info` coverage output and reporting to sonarcloud.io — no self-hosted Sonar server, nothing runs on your own infrastructure. It authenticates with a token and passes the org/project key as CLI args (`-Dsonar.organization`, `-Dsonar.projectKey`), not a checked-in `sonar-project.properties` — there isn't one in this repo, by design, since org/project key differ per fork/account and shouldn't be hardcoded into a file everyone shares.
+
+1. **Sign up** at [sonarcloud.io](https://sonarcloud.io) — "Sign up with GitHub" is the fast path; it also handles the GitHub App install/permissions step for you.
+2. **Create an organization** (free tier — "Sonar Way" is fine): sonarcloud.io → **+** → **Create new organization** → pick "Free plan" → import from GitHub (select your account/org). This mints your **org key** — visible right in the URL (`sonarcloud.io/organizations/<org-key>`) and under **Administration → Organization settings**.
+3. **Create the project**: **+** → **Analyze new project** → pick this repo from the GitHub list (install/grant the SonarCloud GitHub App access to it first if it's not showing). This mints the **project key** — shown on the project's **Information** panel, and changeable later under **Administration → Update Key**. It defaults to `<org>_<repo-name>`.
+4. **Switch off Automatic Analysis** — SonarCloud defaults new projects to analyzing on its own via the GitHub App, which conflicts with (and gets silently skipped in favor of) CI-driven analysis. **Administration → Analysis Method** → toggle **Automatic Analysis** off. Skip this and the CI-based scan can report "automatic analysis is enabled" and refuse to accept the CI's results.
+5. **Generate the token**: avatar (top-right) → **My Account → Security → Generate Token**. Type **Project Analysis Token**, scoped to just this project, is enough — no need for a broader user/global token. **Copy it now**; SonarCloud shows it exactly once and never again. This is `SONAR_TOKEN`.
+
+Free-tier note: public repos are free automatically; private repos are free up to a per-organization lines-of-code cap (check your plan on sonarcloud.io if `test` starts failing with a LOC-limit error instead of a quality-gate one).
+
 In GitHub: **Settings → Secrets and variables → Actions**.
 
 **Secrets** tab:
@@ -153,9 +165,9 @@ In GitHub: **Settings → Secrets and variables → Actions**.
 | `AWS_ACCOUNT_ID` | `aws sts get-caller-identity --query Account --output text` |
 | `AWS_ROLE_ARN` | `terraform output -raw github_oidc_role_arn` — only exists after Step 4's apply |
 | `API_URL` | `https://api.bookstore.<your-domain>` |
-| `SONAR_TOKEN` | sonarcloud.io → My Account → Security |
-| `SONAR_ORGANIZATION` | your SonarCloud org key |
-| `SONAR_PROJECT_KEY` | your SonarCloud project key |
+| `SONAR_TOKEN` | from step 5 above — the Project Analysis Token, copied at generation time |
+| `SONAR_ORGANIZATION` | your org key from step 2 above (URL / Administration → Organization settings) |
+| `SONAR_PROJECT_KEY` | your project key from step 3 above (project's Information panel) |
 
 **Variables** tab (not sensitive — skip entirely if deploying to `us-west-1`):
 
